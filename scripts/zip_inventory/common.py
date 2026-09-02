@@ -71,12 +71,22 @@ class MemberFormatError(Exception):
     """Raised internally for malformed or unsupported member encoding."""
 
 
-def sha256_file(path: Path) -> str:
+def sha256_stream(stream: BinaryIO) -> str:
+    """Hash one already-open seekable stream without changing its position."""
+    current = stream.tell()
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+    try:
+        stream.seek(0)
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+        return digest.hexdigest()
+    finally:
+        stream.seek(current)
+
+
+def sha256_file(path: Path) -> str:
+    with path.open("rb") as handle:
+        return sha256_stream(handle)
 
 
 def escape_untrusted(text: str) -> str:

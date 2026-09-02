@@ -33,7 +33,7 @@ def _validate_archive_limits(
             f"member_limit label={label} observed={state.members_seen} limit={args.max_members}",
         )
         return False
-    declared = sum(info.file_size for info in infos if not info.is_dir())
+    declared = sum(info.file_size for info in infos)
     state.declared_uncompressed_bytes += declared
     if state.declared_uncompressed_bytes > args.max_total_uncompressed_bytes:
         mark_incomplete(
@@ -64,6 +64,22 @@ def _scan_text(raw: bytes, label: str, args: object, state: InventoryState) -> N
         if args.max_hits and state.hits >= args.max_hits:
             mark_incomplete(state, f"hit_limit observed={state.hits} limit={args.max_hits}")
             return
+
+
+def _scan_sfx_prefix(
+    raw: bytes,
+    *,
+    prefix_bytes: int,
+    suffix: str,
+    member_label: str,
+    args: object,
+    state: InventoryState,
+) -> None:
+    if prefix_bytes <= 0:
+        return
+    prefix = raw[:prefix_bytes]
+    if suffix in TEXT_SUFFIXES or looks_textual(prefix):
+        _scan_text(prefix, f"{member_label}#sfx-prefix", args, state)
 
 
 def inventory_zip(
@@ -98,15 +114,22 @@ def inventory_zip(
 
     probe_limit = max(args.max_text_bytes, args.max_nested_zip_bytes)
     for info in infos:
-        if info.is_dir():
-            continue
         if state.incomplete:
             break
+        member_label = f"{label}!/{info.filename}"
+        if info.is_dir():
+            if info.file_size == 0 and info.compress_size == 0:
+                continue
+            mark_incomplete(
+                state,
+                f"nonempty_directory_entry member={member_label} "
+                f"size={info.file_size} compressed_size={info.compress_size}",
+            )
+            break
         if info.flag_bits & 0x1:
-            mark_incomplete(state, f"encrypted_member {label}!/{info.filename}")
+            mark_incomplete(state, f"encrypted_member {member_label}")
             break
 
-        member_label = f"{label}!/{info.filename}"
         suffix = member_suffix(info.filename)
         required_zip = suffix == ".zip"
         raw = read_member_bounded(
@@ -130,6 +153,16 @@ def inventory_zip(
         if state.incomplete:
             break
         if preflight is not None:
+            _scan_sfx_prefix(
+                raw,
+                prefix_bytes=preflight.prefix_bytes,
+                suffix=suffix,
+                member_label=member_label,
+                args=args,
+                state=state,
+            )
+            if state.incomplete:
+                break
             if len(raw) > args.max_nested_zip_bytes:
                 mark_incomplete(
                     state,

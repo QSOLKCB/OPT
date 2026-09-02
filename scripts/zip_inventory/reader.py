@@ -27,6 +27,7 @@ from .common import (
     mark_incomplete,
     read_exact,
     stream_size,
+    unsafe_member,
 )
 
 
@@ -91,6 +92,19 @@ class _BoundedZipLzmaDecompressor:
         return self._decoder.decompress(data, max_length=max_length)
 
 
+def _decode_local_filename(zf: ZipFile, info: ZipInfo, flags: int, raw: bytes) -> str:
+    encoding = "utf-8" if flags & 0x800 else (getattr(zf, "metadata_encoding", None) or "cp437")
+    try:
+        decoded = raw.decode(encoding, errors="strict")
+    except (LookupError, UnicodeDecodeError) as exc:
+        raise MemberFormatError("local filename encoding") from exc
+    if unsafe_member(decoded):
+        raise MemberFormatError("unsafe local filename")
+    if decoded != info.orig_filename:
+        raise MemberFormatError("local filename mismatch")
+    return decoded
+
+
 def read_member_bounded(
     zf: ZipFile,
     info: ZipInfo,
@@ -102,7 +116,7 @@ def read_member_bounded(
 ) -> bytes | None:
     """Read one member without trusting declared uncompressed size."""
     global_remaining = args.max_total_uncompressed_bytes - state.actual_decompressed_bytes
-    if global_remaining <= 0:
+    if global_remaining < 0:
         mark_incomplete(
             state,
             "actual_uncompressed_budget "
@@ -164,6 +178,14 @@ def read_member_bounded(
             raise MemberFormatError("encrypted local member")
         if local_method != info.compress_type:
             raise MemberFormatError("compression method mismatch")
+        relevant_flags = 0x1 | 0x8 | 0x800
+        if info.compress_type == ZIP_LZMA:
+            relevant_flags |= 0x2
+        if (local_flags ^ info.flag_bits) & relevant_flags:
+            raise MemberFormatError("local and central flags differ")
+
+        local_filename_raw = read_exact(fp, filename_len)
+        _decode_local_filename(zf, info, local_flags, local_filename_raw)
 
         data_offset = info.header_offset + LOCAL_FIXED_SIZE + filename_len + extra_len
         data_end = data_offset + info.compress_size
@@ -237,7 +259,8 @@ def read_member_bounded(
                         raise MemberFormatError("LZMA made no progress")
                 if decoder.eof:
                     break
-            if not decoder.eof:
+            eos_marker_required = bool(local_flags & 0x2)
+            if not decoder.eof and eos_marker_required:
                 raise MemberFormatError("LZMA stream boundary")
         else:
             raise MemberFormatError(f"unsupported compression method {info.compress_type}")

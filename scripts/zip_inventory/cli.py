@@ -16,7 +16,7 @@ from .common import (
     nonnegative_int,
     positive_int,
     print_summary,
-    sha256_file,
+    sha256_stream,
     stream_size,
 )
 from .preflight import preflight_zip_stream
@@ -58,52 +58,55 @@ def main() -> int:
     args = parse_args()
     state = InventoryState()
     status = EXIT_INVALID_ZIP
+    label = str(args.archive)
 
     if not args.archive.is_file():
-        mark_invalid(state, f"archive_not_found path={args.archive}")
+        mark_invalid(state, f"archive_not_found path={label}")
         print_summary(state, status)
         return status
 
-    print(f"archive={escape_untrusted(str(args.archive))}")
+    print(f"archive={escape_untrusted(label)}")
     try:
-        print(f"sha256={sha256_file(args.archive)}")
         with args.archive.open("rb") as stream:
+            print(f"sha256={sha256_stream(stream)}")
             preflight = preflight_zip_stream(
                 stream,
                 size=stream_size(stream),
-                label=str(args.archive),
+                label=label,
                 args=args,
                 state=state,
                 required=True,
                 outer=True,
             )
+            if preflight is None:
+                status = (
+                    EXIT_INCOMPLETE
+                    if state.incomplete and not state.invalid
+                    else EXIT_INVALID_ZIP
+                )
+            else:
+                stream.seek(0)
+                try:
+                    with ZipFile(stream) as zf:
+                        status = inventory_zip(
+                            zf,
+                            label=label,
+                            depth=0,
+                            args=args,
+                            state=state,
+                        )
+                except (
+                    BadZipFile,
+                    LargeZipFile,
+                    OSError,
+                    RuntimeError,
+                    UnicodeDecodeError,
+                    zlib.error,
+                ) as exc:
+                    mark_invalid(state, f"archive_open error={type(exc).__name__}")
+                    status = EXIT_INVALID_ZIP
     except (OSError, EOFError, UnicodeDecodeError) as exc:
         mark_invalid(state, f"archive_read error={type(exc).__name__}")
-        preflight = None
-
-    if preflight is None:
-        status = EXIT_INCOMPLETE if state.incomplete and not state.invalid else EXIT_INVALID_ZIP
-        print_summary(state, status)
-        return status
-
-    try:
-        with ZipFile(args.archive) as zf:
-            status = inventory_zip(
-                zf,
-                label=str(args.archive),
-                depth=0,
-                args=args,
-                state=state,
-            )
-    except (
-        BadZipFile,
-        LargeZipFile,
-        OSError,
-        RuntimeError,
-        UnicodeDecodeError,
-        zlib.error,
-    ) as exc:
-        mark_invalid(state, f"archive_open error={type(exc).__name__}")
         status = EXIT_INVALID_ZIP
 
     print_summary(state, status)
