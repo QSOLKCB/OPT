@@ -32,15 +32,15 @@ Separates source-state cache identity from compiled dependency artifacts, verifi
 
 ### OPT-PAR-001 — Bounded parallel execution
 
-**Status:** Verified, environment-specific.
+**Status:** Verified, environment-specific; performance must be re-measured before transfer.
 
-The QEC-validated NEXUS v4.0.1 qBraid evidence compared scalar and worker-count variants, checked output invariants, and recorded observed thread behavior. At seven workers the evidence reports 3.806294× speedup and 0.543756 efficiency in that environment.
+The QEC-validated NEXUS v4.0.1 qBraid evidence compared scalar and worker-count variants, checked output invariants, and recorded observed thread behavior. Its archived seven-worker observation was made on qBraid / Ubuntu 24.04.4 / AMD EPYC 7763 with 16 logical CPUs and effective worker capacity 7. The canonical receipt does not bind the performance samples to an exact `rustc --version`, so OPT retains the numbers as historical evidence rather than a transferable performance target.
 
 ### OPT-DSP-001 — Control-rate sparse vector DSP
 
-**Status:** Implemented reference; native backend ideas partly proposed.
+**Status:** Implemented reference for control-rate/sparse/vector patterns; approximation/native ideas partly proposed.
 
-The SPECTRAL NumPy reference precomputes static state, evolves E8/qutrit control state at ~1 kHz, computes all root phases once per control step, uses a sparse root subset per node, and vectorizes block synthesis. `power_module.md` additionally proposes block SIMD, zero-copy buffers and lock-free/native Rust structures. Those native performance claims are not promoted as verified here.
+The SPECTRAL NumPy reference is pinned to commit `5265b7f130287f80b5cf0d3de5bb2953152f90cd`. It precomputes static state, evolves E8/qutrit control state at ~1 kHz, computes all root phases once per control step, uses a sparse root subset per node, and vectorizes block synthesis. The audition renderer's whole-block modulation shortcut has no defined equivalence/error contract and is therefore not promoted as a reusable correctness-preserving optimization. `power_module.md` additionally proposes block SIMD, zero-copy buffers and lock-free/native Rust structures; those native performance claims are not promoted as verified here.
 
 ## Composition guidance
 

@@ -62,7 +62,7 @@ The difference is normal benchmark/run variance and is preserved rather than ave
 
 ## Target-repo checklist
 
-- Profile with `pytest --durations` or equivalent before editing.
+- Profile with `pytest --durations=20` (or another explicit count; `--durations=0` reports all) or equivalent before editing.
 - Identify the top few expensive tests, not the median test.
 - Write down the assertion semantics each expensive sweep is intended to establish.
 - Minimize fixtures and grid cardinality against those semantics.

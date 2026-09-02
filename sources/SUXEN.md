@@ -11,9 +11,11 @@ Repository metadata currently records:
 
 ## Why this file is not yet cited by an OPT record
 
-The connected GitHub file interface can read repository text but does not expose the bytes of a multi-megabyte binary ZIP for unpacking. A temporary branch workflow was attempted during catalog construction, but app-authored pushes did not trigger an Actions run, so no archive contents were fabricated or inferred.
+The connected GitHub file interface can read repository text but does not expose the bytes of a multi-megabyte binary ZIP for unpacking. No optimization claim is inferred from filenames or container structure alone.
 
-The archive may be related to the architecture described in `power_module.md`, but that relationship is **not assumed** until the ZIP inventory confirms it.
+Review of the initial scanner established that the current outer archive's non-directory payloads are themselves ZIP archives. That is exactly why the inventory tool now performs **bounded recursive ZIP inspection** rather than stopping at the outer suffix list.
+
+The archive may be related to the architecture described in `power_module.md`, but that relationship is **not assumed** until the nested source inventory confirms it.
 
 ## Safe local inventory
 
@@ -23,12 +25,28 @@ From a normal repository checkout:
 python3 scripts/inventory_zip.py suxen.zip
 ```
 
-The script:
+The scanner never extracts members. It:
 
-- computes the archive SHA-256;
-- lists member paths and compressed/uncompressed sizes;
-- rejects suspicious absolute/parent-traversal paths;
-- reads likely text/source members directly from the ZIP without extracting them;
-- prints lines containing optimization keywords such as SIMD, cache, parallel, sparse, vectorized, zero-copy and lock-free.
+- computes the outer archive SHA-256;
+- lists member paths and compressed/uncompressed sizes at each inspected ZIP depth;
+- recursively inspects nested ZIP payloads up to explicit depth/member/size budgets;
+- normalizes both `/` and `\` separators before rejecting absolute and parent-traversal paths;
+- reads likely text/source members directly from ZIP containers;
+- escapes terminal control/format characters before printing untrusted text;
+- prints optimization-keyword hits such as SIMD, cache, parallel, sparse, vectorized, zero-copy and lock-free;
+- exits nonzero with `inventory_complete=false` if a depth, member, byte, encryption, read, nested-ZIP or hit limit prevents a complete scan.
 
-Once the relevant source files are read, promote each reusable mechanism into its own `OPT-*` record with measured/proposed status and provenance.
+Default safety budgets are intentionally bounded and can be overridden explicitly:
+
+```text
+max nested depth: 4
+max members across inspected archives: 20,000
+max one nested ZIP payload: 64 MiB
+max declared uncompressed bytes across inspected archives: 512 MiB
+max one scanned text member: 2,000,000 bytes
+max printed keyword hits: 500
+```
+
+A successful `hits=0` is meaningful only when the summary also says `inventory_complete=true`.
+
+Once the relevant nested source files are read, promote each reusable mechanism into its own `OPT-*` record with measured/proposed status and provenance.
