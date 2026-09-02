@@ -14,19 +14,37 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
       - name: Run ZIP inventory regression tests
         run: python3 -m unittest discover -s tests -v
+
       - name: Audit bundled suxen archive
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          output="$RUNNER_TEMP/suxen-inventory.txt"
+          status=0
           python3 scripts/inventory_zip.py suxen.zip \
             --max-depth=8 \
             --max-members=100000 \
             --max-nested-zip-bytes=134217728 \
             --max-total-uncompressed-bytes=1073741824 \
+            --max-central-directory-bytes=134217728 \
+            --max-compressed-member-bytes=134217728 \
             --max-text-bytes=16777216 \
             --max-hits=100000 \
-            > /tmp/suxen-inventory.txt
-          grep -q '^inventory_complete=true$' /tmp/suxen-inventory.txt
-          tail -n 8 /tmp/suxen-inventory.txt
+            > "$output" || status=$?
+
+          echo '=== suxen inventory diagnostics ==='
+          grep -E \
+            '^(invalid_zip=|inventory_incomplete=|unsafe_members|== summary ==|archives_scanned=|nested_archives=|members_seen=|text_members_scanned=|declared_uncompressed_bytes=|actual_decompressed_bytes=|hits=|inventory_complete=)' \
+            "$output" || true
+
+          if [ "$status" -ne 0 ]; then
+            echo "Bundled suxen inventory failed with status $status" >&2
+            exit "$status"
+          fi
+          if ! grep -q '^inventory_complete=true$' "$output"; then
+            echo 'Bundled suxen inventory did not produce a complete result' >&2
+            exit 1
+          fi

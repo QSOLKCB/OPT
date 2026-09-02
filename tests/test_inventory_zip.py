@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_BZIP2, ZIP_DEFLATED, ZIP_LZMA, ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "inventory_zip.py"
@@ -18,6 +18,34 @@ def zip_bytes(members: dict[str, bytes], *, compression: int = 0) -> bytes:
         for name, content in members.items():
             zf.writestr(name, content)
     return buffer.getvalue()
+
+
+def patch_central_uncompressed_size(raw: bytes, value: int) -> bytes:
+    patched = bytearray(raw)
+    central = patched.find(b"PK\x01\x02")
+    if central < 0:
+        raise AssertionError("central directory not found")
+    patched[central + 24:central + 28] = value.to_bytes(4, "little")
+    return bytes(patched)
+
+
+def patch_invalid_utf8_filename(raw: bytes) -> bytes:
+    patched = bytearray(raw)
+    local = patched.find(b"PK\x03\x04")
+    central = patched.find(b"PK\x01\x02")
+    if local < 0 or central < 0:
+        raise AssertionError("ZIP headers not found")
+
+    local_flags = int.from_bytes(patched[local + 6:local + 8], "little") | 0x800
+    central_flags = int.from_bytes(patched[central + 8:central + 10], "little") | 0x800
+    patched[local + 6:local + 8] = local_flags.to_bytes(2, "little")
+    patched[central + 8:central + 10] = central_flags.to_bytes(2, "little")
+
+    local_name_start = local + 30
+    central_name_start = central + 46
+    patched[local_name_start] = 0xFF
+    patched[central_name_start] = 0xFF
+    return bytes(patched)
 
 
 class InventoryZipTests(unittest.TestCase):
@@ -40,6 +68,29 @@ class InventoryZipTests(unittest.TestCase):
         self.assertIn("bundle.zip!/README.md:1: SIMD enabled", result.stdout)
         self.assertIn("nested_archives=1", result.stdout)
         self.assertIn("hits=1", result.stdout)
+        self.assertIn("inventory_complete=true", result.stdout)
+
+    def test_recognizes_sfx_nested_zip_without_zip_suffix(self) -> None:
+        inner = b"MZ bounded stub\n" + zip_bytes({"README.md": b"SIMD from SFX\n"})
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "outer.zip"
+            archive.write_bytes(zip_bytes({"payload.bin": inner}))
+            result = self.run_inventory(archive)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("payload.bin!/README.md:1: SIMD from SFX", result.stdout)
+        self.assertIn("nested_archives=1", result.stdout)
+        self.assertIn("inventory_complete=true", result.stdout)
+
+    def test_recognizes_outer_sfx_zip(self) -> None:
+        raw = b"MZ outer stub\n" + zip_bytes({"README.md": b"parallel outer SFX\n"})
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "self-extracting.bin"
+            archive.write_bytes(raw)
+            result = self.run_inventory(archive)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("README.md:1: parallel outer SFX", result.stdout)
         self.assertIn("inventory_complete=true", result.stdout)
 
     def test_scans_additional_source_and_evidence_suffixes(self) -> None:
@@ -110,10 +161,14 @@ class InventoryZipTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "large-text.zip"
             archive.write_bytes(zip_bytes({"README.md": b"SIMD\n" * 20}))
-            result = self.run_inventory(archive, "--max-text-bytes=16")
+            result = self.run_inventory(
+                archive,
+                "--max-text-bytes=16",
+                "--max-nested-zip-bytes=16",
+            )
 
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
-        self.assertIn("inventory_incomplete=text_member_size", result.stdout)
+        self.assertIn("inventory_incomplete=declared_member_output_limit", result.stdout)
         self.assertIn("inventory_complete=false", result.stdout)
 
     def test_depth_limit_reports_incomplete_inventory(self) -> None:
@@ -141,6 +196,17 @@ class InventoryZipTests(unittest.TestCase):
         self.assertIn("archives_scanned=1", result.stdout)
         self.assertIn("nested_archives=0", result.stdout)
 
+    def test_outer_member_limit_is_preflighted_before_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "many.zip"
+            archive.write_bytes(zip_bytes({f"f{i}.txt": b"plain\n" for i in range(5)}))
+            result = self.run_inventory(archive, "--max-members=3")
+
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn("inventory_incomplete=member_limit_outer_preflight", result.stdout)
+        self.assertIn("archives_scanned=0", result.stdout)
+        self.assertIn("inventory_complete=false", result.stdout)
+
     def test_corrupt_deflate_reports_read_error_without_traceback(self) -> None:
         raw = bytearray(zip_bytes({"broken.py": b"SIMD payload\n" * 20}, compression=ZIP_DEFLATED))
         marker = raw.find(b"PK\x03\x04")
@@ -158,6 +224,65 @@ class InventoryZipTests(unittest.TestCase):
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
         self.assertIn("inventory_incomplete=read_error", result.stdout)
         self.assertIn("inventory_complete=false", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_malformed_utf8_filename_is_invalid_without_traceback(self) -> None:
+        raw = patch_invalid_utf8_filename(zip_bytes({"x.py": b"SIMD\n"}))
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "bad-name.zip"
+            archive.write_bytes(raw)
+            result = self.run_inventory(archive)
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("invalid_zip=", result.stdout)
+        self.assertIn("reason=filename_utf8", result.stdout)
+        self.assertIn("inventory_complete=false", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_bzip2_underreported_size_is_bounded(self) -> None:
+        raw = zip_bytes({"payload.py": b"SIMD\n" * 200_000}, compression=ZIP_BZIP2)
+        raw = patch_central_uncompressed_size(raw, 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "underreported-bzip2.zip"
+            archive.write_bytes(raw)
+            result = self.run_inventory(
+                archive,
+                "--max-text-bytes=1024",
+                "--max-nested-zip-bytes=1024",
+            )
+
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn("inventory_incomplete=member_output_limit", result.stdout)
+        self.assertIn("observed_at_least=1025", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_lzma_underreported_size_is_bounded(self) -> None:
+        raw = zip_bytes({"payload.py": b"parallel\n" * 150_000}, compression=ZIP_LZMA)
+        raw = patch_central_uncompressed_size(raw, 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "underreported-lzma.zip"
+            archive.write_bytes(raw)
+            result = self.run_inventory(
+                archive,
+                "--max-text-bytes=1024",
+                "--max-nested-zip-bytes=1024",
+            )
+
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn("inventory_incomplete=member_output_limit", result.stdout)
+        self.assertIn("observed_at_least=1025", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_zero_hit_cap_allows_complete_inventory(self) -> None:
+        payload = b"".join(b"SIMD\n" for _ in range(600))
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "many-hits.zip"
+            archive.write_bytes(zip_bytes({"README.md": payload}))
+            result = self.run_inventory(archive, "--max-hits=0")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("hits=600", result.stdout)
+        self.assertIn("inventory_complete=true", result.stdout)
 
 
 if __name__ == "__main__":
