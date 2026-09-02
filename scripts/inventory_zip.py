@@ -155,9 +155,14 @@ def _scan_text_member(
     args: argparse.Namespace,
     state: InventoryState,
 ) -> None:
-    if info.file_size > args.max_text_bytes:
-        return
     if member_suffix(info.filename) not in TEXT_SUFFIXES:
+        return
+    if info.file_size > args.max_text_bytes:
+        _mark_incomplete(
+            state,
+            "text_member_size "
+            f"member={member_label} size={info.file_size} limit={args.max_text_bytes}",
+        )
         return
 
     raw = _read_member(zf, info, member_label=member_label, state=state)

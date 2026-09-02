@@ -66,6 +66,16 @@ class InventoryZipTests(unittest.TestCase):
         self.assertIn(r"\x07", result.stdout)
         self.assertIn(r"\u202e", result.stdout)
 
+    def test_text_size_limit_reports_incomplete_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "large-text.zip"
+            archive.write_bytes(zip_bytes({"README.md": b"SIMD\n" * 20}))
+            result = self.run_inventory(archive, "--max-text-bytes=16")
+
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn("inventory_incomplete=text_member_size", result.stdout)
+        self.assertIn("inventory_complete=false", result.stdout)
+
     def test_depth_limit_reports_incomplete_inventory(self) -> None:
         deepest = zip_bytes({"README.md": b"SIMD\n"})
         middle = zip_bytes({"deep.zip": deepest})
