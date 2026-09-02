@@ -16,3 +16,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Run ZIP inventory regression tests
         run: python3 -m unittest discover -s tests -v
+      - name: Audit bundled suxen archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/inventory_zip.py suxen.zip \
+            --max-depth=8 \
+            --max-members=100000 \
+            --max-nested-zip-bytes=134217728 \
+            --max-total-uncompressed-bytes=1073741824 \
+            --max-text-bytes=16777216 \
+            --max-hits=100000 \
+            > /tmp/suxen-inventory.txt
+          grep -q '^inventory_complete=true$' /tmp/suxen-inventory.txt
+          tail -n 8 /tmp/suxen-inventory.txt

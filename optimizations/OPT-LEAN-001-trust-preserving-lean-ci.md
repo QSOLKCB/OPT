@@ -1,13 +1,14 @@
 # OPT-LEAN-001 — Trust-Preserving Lean Dependency Reuse
 
-**Status:** Verified on QSOL-GEO-REASON PR #3 source lane  
+**Status:** Verified on QSOL-GEO-REASON PR #3 source lane; timing observations are environment-scoped  
 **Domains:** Lean 4, mathlib, Lake, GitHub Actions, formal-method CI
 
 ## Source evidence
 
 - PR: https://github.com/QSOLKCB/QSOL-GEO-REASON/pull/3
 - Cache policy: https://github.com/QSOLKCB/QSOL-GEO-REASON/blob/lean-phase1-v0.1.0/LEAN-CACHE-POLICY.md
-- Current formalization line pins Lean v4.33.1 and a specific mathlib commit.
+- Verified-cache run containing the 8.47 s project rebuild: https://github.com/QSOLKCB/QSOL-GEO-REASON/actions/runs/33619861126
+- Formalization line pins Lean `v4.33.1` and mathlib commit `0df444a360eaa60ab8c11dca51a86af692955474`.
 
 ## Problem
 
@@ -45,12 +46,27 @@ The source project bounded Lean workers to available CPUs with an upper cap of f
 The QSOL-GEO-REASON cache policy records its first audited dependency build at:
 
 - cold dependency source build wall time: **2501.52 s**;
-- Lean threads: **4**;
-- cached dependency artifact records: **37,312**.
+- Lean threads: **4** on **4 runner CPUs**;
+- cached dependency artifact records: **37,312**;
+- workflow target: `ubuntu-24.04`, `x86_64`;
+- Lean: **4.33.1**;
+- mathlib commit: `0df444a360eaa60ab8c11dca51a86af692955474`.
 
-A later verified-cache PR run records the **current GeoReason project rebuild** at **8.47 s** on four Lean threads after source/build cache verification.
+A later verified-cache PR run records the **current GeoReason project rebuild** at **8.47 s** after source/build cache verification. That run used:
 
-These are different scopes. The record intentionally does **not** divide 2501.52 by 8.47 and call that a universal speedup.
+- GitHub hosted `ubuntu-24.04` (log reports Ubuntu **24.04.4 LTS**);
+- `x86_64`;
+- **4 runner CPUs / 4 Lean threads**;
+- Lean **4.33.1**.
+
+### Timing-context boundary
+
+The cold and verified-cache values are **single source observations of different scopes**:
+
+- the cold figure measures dependency reconstruction from pinned source;
+- the 8.47 s figure measures only the current GeoReason project rebuild after verified dependency reuse.
+
+The cited policy/run does not preserve an exact CPU model for these observations, nor a repeated-sample distribution. OPT therefore does not divide them into a “speedup” and does not promote either value as a transferable timing target. Re-measure cold and verified-cache lanes on the target runner when performance authority matters.
 
 ## Generic cache-key ingredients
 

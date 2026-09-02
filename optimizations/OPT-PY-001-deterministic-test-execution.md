@@ -1,6 +1,6 @@
 # OPT-PY-001 — Deterministic Test Execution
 
-**Status:** Verified  
+**Status:** Verified mechanism; historical performance context incomplete  
 **Domains:** Python, pytest, deterministic numerical simulation, CI  
 **Primary sources:** QEC v68.2.0, v68.4.0, v68.4.1
 
@@ -58,7 +58,18 @@ Two source measurements exist for v68.4.0:
 - implementation commit: ~127 s → ~52 s (~2.4×);
 - published release notes: ~126 s → ~46 s (~2.7×).
 
-The difference is normal benchmark/run variance and is preserved rather than averaged away. The v68.4.1 release reports ~40 s with **3779 passed / 8 skipped** and deterministic behavior preserved.
+The v68.4.1 release reports ~40 s with **3779 passed / 8 skipped** and deterministic behavior preserved.
+
+### Historical benchmark context
+
+The v68.x release/commit records preserve the before/after totals and test counts, but they do **not** preserve a complete benchmark environment:
+
+- runner / OS / CPU model: **not recorded in the cited release/commit evidence**;
+- Python / NumPy / pytest versions: **not recorded there**;
+- repetitions and variance: **not recorded**;
+- the difference between the commit (~52 s) and release (~46 s) observations demonstrates that these were not a single controlled benchmark series.
+
+Accordingly, OPT treats the v68.x timings as **historical source observations supporting the existence of a substantial optimization**, not as portable benchmark targets. The verified reusable claim is the mechanism plus the preserved test/assertion surface. Re-measure on the target runner before making a speedup claim.
 
 ## Target-repo checklist
 
@@ -69,7 +80,7 @@ The difference is normal benchmark/run variance and is preserved rather than ave
 - Add deterministic early-exit only where result equivalence is defensible.
 - Cache only pure state and test cache isolation.
 - Re-run the full suite, not only the optimized tests.
-- Record before/after wall time on the same machine/runner class.
+- Record before/after wall time **plus runner/OS/CPU/toolchain and repetition count** on the same machine/runner class.
 
 ## Do not use when
 

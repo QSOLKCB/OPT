@@ -11,16 +11,25 @@ import argparse
 import hashlib
 import io
 import re
+import struct
 import unicodedata
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from zipfile import BadZipFile, ZipFile, ZipInfo
 
 TEXT_SUFFIXES = {
-    ".md", ".txt", ".py", ".rs", ".toml", ".c", ".cc", ".cpp", ".h",
-    ".hh", ".hpp", ".json", ".yml", ".yaml", ".xml", ".js", ".ts",
+    ".md", ".txt", ".py", ".pyi", ".rs", ".toml", ".c", ".cc", ".cpp", ".h",
+    ".hh", ".hpp", ".inc", ".json", ".jsonl", ".yml", ".yaml", ".xml", ".svg",
+    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".csv", ".tsv", ".tex", ".rst",
+    ".html", ".htm", ".css", ".scss", ".sh", ".bash", ".zsh", ".ps1", ".bat",
+    ".cmd", ".java", ".kt", ".kts", ".go", ".rb", ".php", ".swift", ".scala",
+    ".sql", ".ini", ".cfg", ".conf", ".properties", ".lock", ".lean", ".lake",
+    ".cmake",
 }
 ZIP_MAGIC_PREFIXES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+EOCD_SIGNATURE = b"PK\x05\x06"
+CENTRAL_SIGNATURE = b"PK\x01\x02"
 KEYWORDS = re.compile(
     r"simd|zero[- ]?copy|lock[- ]?free|cache|caching|parallel|thread|sparse|"
     r"precomput|control[-_ ]?rate|block[-_ ]?process|vectori[sz]|packed|rayon|"
@@ -90,18 +99,80 @@ def _mark_incomplete(state: InventoryState, reason: str) -> None:
     print(f"inventory_incomplete={escape_untrusted(reason)}")
 
 
-def _read_prefix(zf: ZipFile, info: ZipInfo, count: int = 4) -> bytes:
-    with zf.open(info, "r") as handle:
-        return handle.read(count)
-
-
-def _is_nested_zip(zf: ZipFile, info: ZipInfo) -> bool:
-    if member_suffix(info.filename) == ".zip":
-        return True
+def _read_prefix(
+    zf: ZipFile,
+    info: ZipInfo,
+    *,
+    member_label: str,
+    state: InventoryState,
+    count: int = 4096,
+) -> bytes | None:
     try:
-        return _read_prefix(zf, info) in ZIP_MAGIC_PREFIXES
-    except (RuntimeError, OSError, BadZipFile):
+        with zf.open(info, "r") as handle:
+            return handle.read(count)
+    except (BadZipFile, OSError, RuntimeError, EOFError, zlib.error) as exc:
+        _mark_incomplete(
+            state,
+            f"read_error member={member_label} error={type(exc).__name__}",
+        )
+        return None
+
+
+def _read_member(
+    zf: ZipFile,
+    info: ZipInfo,
+    *,
+    member_label: str,
+    state: InventoryState,
+) -> bytes | None:
+    try:
+        return zf.read(info)
+    except (BadZipFile, OSError, RuntimeError, EOFError, zlib.error) as exc:
+        _mark_incomplete(
+            state,
+            f"read_error member={member_label} error={type(exc).__name__}",
+        )
+        return None
+
+
+def _looks_textual(prefix: bytes) -> bool:
+    if not prefix:
         return False
+    if b"\x00" in prefix:
+        return False
+    try:
+        text = prefix.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    if not text:
+        return False
+    allowed_controls = {"\t", "\n", "\r", "\f"}
+    suspicious = sum(
+        1
+        for ch in text
+        if unicodedata.category(ch).startswith("C") and ch not in allowed_controls
+    )
+    return suspicious <= max(1, len(text) // 100)
+
+
+def _match_context(line: str, match: re.Match[str], width: int = 400) -> str:
+    """Return terminal-safe bounded context that always contains the match."""
+    safe_match = escape_untrusted(line[match.start():match.end()])
+    safe_before = escape_untrusted(line[:match.start()])
+    safe_after = escape_untrusted(line[match.end():])
+    left_marker = "…" if match.start() else ""
+    right_marker = "…" if match.end() < len(line) else ""
+
+    fixed = len(left_marker) + len(safe_match) + len(right_marker)
+    if fixed >= width:
+        return (left_marker + safe_match + right_marker)[:width]
+
+    available = width - fixed
+    before_budget = min(120, available // 3)
+    before = safe_before[-before_budget:] if before_budget else ""
+    after_budget = available - len(before)
+    after = safe_after[:after_budget]
+    return left_marker + before + safe_match + after + right_marker
 
 
 def _validate_archive_limits(
@@ -131,21 +202,97 @@ def _validate_archive_limits(
     return True
 
 
-def _read_member(
-    zf: ZipFile,
-    info: ZipInfo,
+def _preflight_nested_zip(
+    raw: bytes,
     *,
     member_label: str,
+    args: argparse.Namespace,
     state: InventoryState,
-) -> bytes | None:
+) -> bool:
+    """Count a nested ZIP central directory before ZipFile materializes ZipInfo objects."""
+    search_start = max(0, len(raw) - (65535 + 22))
+    eocd = raw.rfind(EOCD_SIGNATURE, search_start)
+    if eocd < 0 or eocd + 22 > len(raw):
+        _mark_incomplete(state, f"invalid_nested_zip member={member_label} reason=eocd")
+        return False
+
     try:
-        return zf.read(info)
-    except (BadZipFile, OSError, RuntimeError) as exc:
+        (
+            disk_number,
+            central_disk,
+            entries_on_disk,
+            entries_total,
+            central_size,
+            central_offset,
+            comment_length,
+        ) = struct.unpack_from("<4H2LH", raw, eocd + 4)
+    except struct.error:
+        _mark_incomplete(state, f"invalid_nested_zip member={member_label} reason=eocd_fields")
+        return False
+
+    if eocd + 22 + comment_length != len(raw):
+        _mark_incomplete(state, f"invalid_nested_zip member={member_label} reason=trailing_or_comment")
+        return False
+    if disk_number != 0 or central_disk != 0 or entries_on_disk != entries_total:
+        _mark_incomplete(state, f"unsupported_nested_zip member={member_label} reason=multi_disk")
+        return False
+    if (
+        entries_total == 0xFFFF
+        or central_size == 0xFFFFFFFF
+        or central_offset == 0xFFFFFFFF
+    ):
+        _mark_incomplete(state, f"unsupported_nested_zip member={member_label} reason=zip64")
+        return False
+
+    central_end = central_offset + central_size
+    if central_end != eocd or central_end > len(raw):
+        _mark_incomplete(state, f"invalid_nested_zip member={member_label} reason=central_bounds")
+        return False
+
+    cursor = central_offset
+    count = 0
+    while cursor < central_end:
+        if cursor + 46 > central_end or raw[cursor:cursor + 4] != CENTRAL_SIGNATURE:
+            _mark_incomplete(
+                state,
+                f"invalid_nested_zip member={member_label} reason=central_header",
+            )
+            return False
+        try:
+            filename_len, extra_len, member_comment_len = struct.unpack_from(
+                "<HHH", raw, cursor + 28
+            )
+        except struct.error:
+            _mark_incomplete(
+                state,
+                f"invalid_nested_zip member={member_label} reason=central_lengths",
+            )
+            return False
+        next_cursor = cursor + 46 + filename_len + extra_len + member_comment_len
+        if next_cursor > central_end:
+            _mark_incomplete(
+                state,
+                f"invalid_nested_zip member={member_label} reason=central_entry_bounds",
+            )
+            return False
+        count += 1
+        if state.members_seen + count > args.max_members:
+            _mark_incomplete(
+                state,
+                "member_limit_preflight "
+                f"member={member_label} projected={state.members_seen + count} "
+                f"limit={args.max_members}",
+            )
+            return False
+        cursor = next_cursor
+
+    if cursor != central_end or count != entries_total:
         _mark_incomplete(
             state,
-            f"read_error member={member_label} error={type(exc).__name__}",
+            f"invalid_nested_zip member={member_label} reason=central_count",
         )
-        return None
+        return False
+    return True
 
 
 def _scan_text_member(
@@ -154,8 +301,11 @@ def _scan_text_member(
     member_label: str,
     args: argparse.Namespace,
     state: InventoryState,
+    *,
+    detected_text: bool,
 ) -> None:
-    if member_suffix(info.filename) not in TEXT_SUFFIXES:
+    known_text = member_suffix(info.filename) in TEXT_SUFFIXES
+    if not known_text and not detected_text:
         return
     if info.file_size > args.max_text_bytes:
         _mark_incomplete(
@@ -171,10 +321,13 @@ def _scan_text_member(
     text = raw.decode("utf-8", errors="replace")
     state.text_members_scanned += 1
     for lineno, line in enumerate(text.splitlines(), start=1):
-        if not KEYWORDS.search(line):
+        match = KEYWORDS.search(line)
+        if match is None:
             continue
-        safe_line = escape_untrusted(line)
-        print(f"{escape_untrusted(member_label)}:{lineno}: {safe_line[:400]}")
+        print(
+            f"{escape_untrusted(member_label)}:{lineno}: "
+            f"{_match_context(line, match)}"
+        )
         state.hits += 1
         if state.hits >= args.max_hits:
             _mark_incomplete(state, f"hit_limit observed={state.hits} limit={args.max_hits}")
@@ -222,7 +375,23 @@ def inventory_zip(
             break
 
         member_label = f"{label}!/{info.filename}"
-        if _is_nested_zip(zf, info):
+        suffix = member_suffix(info.filename)
+        prefix: bytes | None = None
+
+        if suffix == ".zip":
+            nested_zip = True
+        else:
+            prefix = _read_prefix(
+                zf,
+                info,
+                member_label=member_label,
+                state=state,
+            )
+            if prefix is None:
+                break
+            nested_zip = prefix[:4] in ZIP_MAGIC_PREFIXES
+
+        if nested_zip:
             if depth >= args.max_depth:
                 _mark_incomplete(
                     state,
@@ -241,6 +410,13 @@ def inventory_zip(
             raw = _read_member(zf, info, member_label=member_label, state=state)
             if raw is None:
                 break
+            if not _preflight_nested_zip(
+                raw,
+                member_label=member_label,
+                args=args,
+                state=state,
+            ):
+                break
             try:
                 with ZipFile(io.BytesIO(raw)) as nested:
                     state.nested_archives += 1
@@ -251,8 +427,11 @@ def inventory_zip(
                         args=args,
                         state=state,
                     )
-            except BadZipFile:
-                _mark_incomplete(state, f"invalid_nested_zip member={member_label}")
+            except (BadZipFile, zlib.error) as exc:
+                _mark_incomplete(
+                    state,
+                    f"invalid_nested_zip member={member_label} error={type(exc).__name__}",
+                )
                 break
             if status == EXIT_UNSAFE_MEMBER:
                 return status
@@ -260,7 +439,23 @@ def inventory_zip(
                 break
             continue
 
-        _scan_text_member(zf, info, member_label, args, state)
+        if prefix is None:
+            prefix = _read_prefix(
+                zf,
+                info,
+                member_label=member_label,
+                state=state,
+            )
+            if prefix is None:
+                break
+        _scan_text_member(
+            zf,
+            info,
+            member_label,
+            args,
+            state,
+            detected_text=_looks_textual(prefix),
+        )
 
     return EXIT_INCOMPLETE if state.incomplete else 0
 

@@ -14,21 +14,21 @@
 
 ### OPT-PY-001 — Deterministic test execution
 
-**Status:** Verified.
+**Status:** Verified mechanism; historical performance context incomplete.
 
-QEC combined minimal fixtures, vectorized assertions, bounded deterministic caching, convergence/cycle early exit, smaller high-cost sweeps, lower safe iteration/trial counts, and repeated-work removal. QEC v68.4.0 reports about 126 s → 46 s (~2.7×) with 3779 passed / 8 skipped; v68.4.1 reports about 40 s after hardening.
+QEC combined minimal fixtures, vectorized assertions, bounded deterministic caching, convergence/cycle early exit, smaller high-cost sweeps, lower safe iteration/trial counts, and repeated-work removal. QEC v68.4.0 reports about 126 s → 46 s (~2.7×) with 3779 passed / 8 skipped; v68.4.1 reports about 40 s after hardening. The cited v68.x records do not preserve runner/CPU/Python/pytest/repetition metadata, so these are historical observations, not transferable benchmark targets.
 
 ### OPT-INV-001 — Invariant-driven computation reuse
 
-**Status:** Verified.
+**Status:** Verified mechanism; historical performance context incomplete.
 
-QEC formalized the baseline equivalence `URW(min_sum, rho=1.0) == baseline min-sum`, tested exact equality, centralized the predicate, and reused the baseline result rather than rerunning the benchmark. The implementation commit reports about 43% speedup for that hot test.
+QEC formalized the baseline equivalence `URW(min_sum, rho=1.0) == baseline min-sum`, tested exact equality, centralized the predicate, and reused the baseline result rather than rerunning the benchmark. The implementation commit reports about 43% speedup for that hot test, but does not preserve its runner/toolchain, exact hot-test wall times, or repetitions. Re-measure before making a target-repo speed claim.
 
 ### OPT-LEAN-001 — Trust-preserving Lean CI
 
-**Status:** Verified on QSOL-GEO-REASON PR #3 source lane.
+**Status:** Verified on QSOL-GEO-REASON PR #3 source lane; timing observations are environment-scoped.
 
-Separates source-state cache identity from compiled dependency artifacts, verifies both before use, rebuilds the current project source, and keeps a no-cache `cold-trust` lane for release-grade reconstruction claims. The cache policy records a 2501.52 s cold dependency build; a later verified-cache run records an 8.47 s GeoReason project build on four Lean threads. These timings cover different scopes and must not be divided into a fake universal speedup ratio.
+Separates source-state cache identity from compiled dependency artifacts, verifies both before use, rebuilds the current project source, and keeps a no-cache `cold-trust` lane for release-grade reconstruction claims. The cache policy records a 2501.52 s cold dependency build using four Lean threads on a four-CPU `ubuntu-24.04` / x86_64 lane; a later verified-cache run records an 8.47 s GeoReason project build on a four-CPU Ubuntu 24.04.4 hosted runner. These are single observations of different scopes, with no exact CPU model/repetition distribution preserved, so they must not be divided into a portable speedup.
 
 ### OPT-PAR-001 — Bounded parallel execution
 

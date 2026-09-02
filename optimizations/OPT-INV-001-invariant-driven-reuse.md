@@ -1,6 +1,6 @@
 # OPT-INV-001 — Invariant-Driven Computation Reuse
 
-**Status:** Verified  
+**Status:** Verified mechanism; historical performance context incomplete  
 **Domains:** tests, simulations, parameter sweeps, numerical kernels, build pipelines
 
 ## Source evidence
@@ -42,6 +42,17 @@ for parameter in grid:
 ## Evidence
 
 The QEC implementation commit reports roughly **43% speedup for the affected hot test** after eliminating one redundant `run_benchmark` call. The full suite remained green.
+
+### Historical benchmark context
+
+The cited implementation commit does **not** preserve enough benchmark metadata to make that 43% figure reproducible as a controlled benchmark:
+
+- runner / OS / CPU model: **not recorded in the cited commit**;
+- Python / NumPy / pytest versions: **not recorded**;
+- baseline and optimized wall-clock values for the affected hot test: **not recorded**;
+- repetitions / variance: **not recorded**.
+
+The promoted fact is therefore the **verified equivalence-and-reuse mechanism**. The 43% figure is retained only as a source-reported historical observation. Any target repository must measure its own baseline and optimized timing before treating this pattern as a performance result.
 
 ## Why this is stronger than ordinary memoization
 
