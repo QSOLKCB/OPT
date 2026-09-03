@@ -161,10 +161,6 @@ def inventory_zip(
             f"{escape_untrusted(member_label)}"
         )
 
-    probe_limit = max(
-        args.max_text_bytes,
-        args.max_nested_zip_bytes,
-    )
     for info in infos:
         if state.incomplete:
             break
@@ -193,8 +189,13 @@ def inventory_zip(
             member_limit = 0
         elif required_zip:
             member_limit = args.max_nested_zip_bytes
+        elif suffix in TEXT_SUFFIXES:
+            member_limit = args.max_text_bytes
         else:
-            member_limit = probe_limit
+            # Unknown/general members must not inherit the nested-ZIP cap.
+            # They are bounded separately until content classification decides
+            # whether the stricter text or nested-ZIP budget applies.
+            member_limit = args.max_general_member_bytes
 
         raw = read_member_bounded(
             zf,
