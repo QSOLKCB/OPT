@@ -10,6 +10,7 @@ from .common import (
     CENTRAL_FIXED_SIZE,
     CENTRAL_SIGNATURE,
     EOCD_SIGNATURE,
+    LOCAL_SIGNATURE,
     MAX_EOCD_SEARCH,
     InventoryState,
     ZipPreflight,
@@ -117,11 +118,16 @@ def preflight_zip_stream(
             mark_incomplete(state, f"{target} member={label} {detail}")
         return None
 
-    prefix_bytes = eocd_offset - central_size - central_offset
-    if prefix_bytes < 0:
+    # This is the concatenation adjustment used by ``ZipFile`` when offsets in
+    # the central directory were *not* rebased after prepending an SFX wrapper.
+    # It is not, by itself, a reliable prefix boundary: producers may instead
+    # rebase both the EOCD central offset and each local-header offset, making
+    # this adjustment zero even though wrapper bytes precede the first header.
+    concatenation_adjustment = eocd_offset - central_size - central_offset
+    if concatenation_adjustment < 0:
         reject("central_offset_before_start")
         return None
-    central_start = prefix_bytes + central_offset
+    central_start = concatenation_adjustment + central_offset
     central_end = central_start + central_size
     if central_end != eocd_offset or central_start < 0 or central_end > size:
         reject("central_bounds")
@@ -130,6 +136,7 @@ def preflight_zip_stream(
     projected_base = state.members_seen
     cursor = central_start
     count = 0
+    earliest_local_header: int | None = None
     try:
         stream.seek(central_start)
         while cursor < central_end:
@@ -161,6 +168,19 @@ def preflight_zip_stream(
             if filename_len == 0:
                 reject("empty_filename")
                 return None
+
+            adjusted_local_offset = concatenation_adjustment + local_offset
+            if adjusted_local_offset < 0 or adjusted_local_offset >= central_start:
+                reject(
+                    "local_header_offset "
+                    f"observed={adjusted_local_offset} central_start={central_start}"
+                )
+                return None
+            if (
+                earliest_local_header is None
+                or adjusted_local_offset < earliest_local_header
+            ):
+                earliest_local_header = adjusted_local_offset
 
             next_cursor = cursor + CENTRAL_FIXED_SIZE + filename_len + extra_len + comment_len
             if next_cursor > central_end:
@@ -195,6 +215,27 @@ def preflight_zip_stream(
     if cursor != central_end or count != entries_total:
         reject(f"central_count observed={count} declared={entries_total}")
         return None
+
+    # The first adjusted local-header offset is the actual SFX prefix boundary
+    # for both styles: offsets left archive-relative plus a concatenation
+    # adjustment, and offsets explicitly rebased by the SFX producer. For an
+    # empty archive there is no local header, so the central directory itself is
+    # the first ZIP structure after any wrapper.
+    prefix_bytes = (
+        earliest_local_header
+        if earliest_local_header is not None
+        else central_start
+    )
+    if earliest_local_header is not None:
+        current = stream.tell()
+        try:
+            stream.seek(earliest_local_header)
+            if read_exact(stream, 4) != LOCAL_SIGNATURE:
+                reject("first_local_header_signature")
+                return None
+        finally:
+            stream.seek(current)
+
     return ZipPreflight(count, central_start, central_size, prefix_bytes)
 
 
