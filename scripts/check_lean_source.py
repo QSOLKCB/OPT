@@ -12,13 +12,16 @@ INTERPOLATOR = re.compile(r"[A-Za-z_][A-Za-z0-9_']*!\"")
 
 
 def strip_comments_and_strings(text: str) -> str:
-    """Blank inert comments/string text while preserving interpolated Lean expressions."""
+    """Blank inert comments/literals while preserving interpolated Lean expressions."""
     out = [" "] * len(text)
     n = len(text)
 
     def keep_newline(i: int) -> None:
         if text[i] == "\n":
             out[i] = "\n"
+
+    def ident_continuation(ch: str) -> bool:
+        return ch.isalnum() or ch in "_'"
 
     def scan_line_comment(i: int) -> int:
         i += 2
@@ -61,6 +64,23 @@ def strip_comments_and_strings(text: str) -> str:
             i += 1
         raise ValueError("unterminated string literal")
 
+    def scan_char_literal(i: int) -> int:
+        """Skip one Lean character literal without exposing brace payloads."""
+        i += 1
+        escaped = False
+        while i < n:
+            ch = text[i]
+            if ch == "\n":
+                raise ValueError("unterminated character literal")
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == "'":
+                return i + 1
+            i += 1
+        raise ValueError("unterminated character literal")
+
     def scan_code(i: int, interpolation_depth: int | None = None) -> int:
         depth = interpolation_depth
         while i < n:
@@ -80,6 +100,12 @@ def strip_comments_and_strings(text: str) -> str:
 
             if ch == '"':
                 i = scan_plain_string(i + 1)
+                continue
+
+            # Lean permits apostrophes in identifiers (for example `foo'`), so
+            # only treat a quote at a token boundary as a character literal.
+            if ch == "'" and (i == 0 or not ident_continuation(text[i - 1])):
+                i = scan_char_literal(i)
                 continue
 
             if depth is not None:
@@ -155,12 +181,22 @@ def run_self_test() -> None:
         "block comment": "/- sorry /- constant -/ unsafe -/\ntheorem t : True := by trivial",
         "interpolation literal": 'def x := s!"sorry {{constant}} {1}"',
         "interpolation nested string": 'def x := s!"{let y := "sorry"; y}"',
+        "character closing brace": "def x := s!\"{let c := '}'; c}\"",
+        "identifier apostrophe": "def foo' : Nat := 1",
     }
     unsafe_cases = {
         "sorry interpolation": ('def x := s!"{(sorry : Nat)}"', "sorry"),
         "message interpolation": ('def x := m!"{(admit : MessageData)}"', "admit"),
         "constant declaration": ("constant untrusted : Prop", "constant"),
         "nested interpolation": ('def x := s!"{s!"{(admit : Nat)}"}"', "admit"),
+        "char literal before sorry": (
+            "def x := s!\"{let c := '}'; (sorry : Nat)}\"",
+            "sorry",
+        ),
+        "escaped char before admit": (
+            "def x := s!\"{let c := '\\\''; (admit : Nat)}\"",
+            "admit",
+        ),
     }
 
     for name, source in safe_cases.items():
