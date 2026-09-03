@@ -11,6 +11,14 @@ This directory formalizes the **contract invariants** frozen by the immutable `v
 
 CI independently verifies that the Git tag resolves to the frozen merge commit. During PR #2 only, CI additionally proves that the original v1.0.0 repository surface is unchanged outside the new formalization/trust files. That construction-time check is deliberately not a permanent freeze on later OPT releases.
 
+The constructed v1 formal model itself is permanently content-pinned by Git blob identity:
+
+- `Lean/OPTFormal/Core.lean`: `b475c372af35c9ccbe00b9ffb96b269dcf9046a4`
+- `Lean/OPTFormal/FrozenV100.lean`: `54679a032d1f0e83ddb1b344b9d53d1c11ea84cf`
+- `Lean/OPTFormal.lean`: `7a19560f3447ad2e8bfaedb7268be48e2c642c18`
+
+Future versions may add separately versioned formal modules, but those three v1 model files must remain byte-identical for the persistent v1 gate to pass.
+
 The Lean constants recording the release identity are documentation inside the formal model; the Git checks are the evidence binding.
 
 ## What is formalized
@@ -28,6 +36,7 @@ The proof layer covers the reusable logical contracts in the frozen catalog:
 | DSP approximation requires an error contract | `missingErrorBoundBlocksApproximation` |
 | Composition requires a combined resource model | `Composable` / `composableIsSymmetric` |
 | Historical observations are distinct from transferable benchmark targets | `ClaimScope` plus the frozen-record claim theorems |
+| Transferable claims require target-machine evidence | `TargetContextEvidence`, `TransferableClaimAllowed`, `transferableClaimRequiresTargetContext` |
 | Frozen catalog contains exactly five unique records | `frozenCatalogHasFiveRecords`, `frozenCatalogHasNoDuplicateRecords` |
 | `suxen.zip` remains a source candidate | `suxenInventoryHitsDoNotPromoteMeasuredPerformance` |
 
@@ -38,7 +47,7 @@ The frozen catalog intentionally retains caveated historical timing observations
 - `historicalObservation`: a source observation may be retained with its caveats;
 - `transferableTarget`: a number is being asserted as a target for another environment.
 
-`verifiedMechanism` and `verifiedEnvironmentSpecific` may support the former, but do not by themselves support the latter. This matches the v1.0.0 requirement to re-measure adaptations instead of treating source-project timings as universal constants.
+No `EvidenceStatus`, including `verified`, authorizes a transferable target by itself. Promotion requires explicit target-context premises: a target measurement, correctness validation, and provenance binding. This matches the v1.0.0 requirement to benchmark adaptations in their target environment rather than treating source-project timings as universal constants.
 
 ## What is deliberately not formalized as a theorem
 
@@ -57,17 +66,19 @@ Those are evidence/provenance questions. The formal layer proves implications on
 The formal package has no third-party Lean dependencies and no mathlib dependency graph. CI:
 
 1. always checks that `v1.0.0` resolves to the frozen merge commit and that the current revision descends from it;
-2. during PR #2 only, rejects modifications to the inherited v1.0.0 surface outside the new formalization files;
-3. verifies the exact `lean-toolchain` declaration;
-4. downloads Lean 4.33.1 from the official Lean release and verifies its SHA-256 before use;
-5. rejects `sorry`, `admit`, user `axiom`/`constant` declarations, and `unsafe` in Lean source outside inert comments/string text;
-6. self-tests that source scanner against interpolation-body bypasses such as `s!"{(sorry : Nat)}"` and nested/message interpolators;
-7. builds the library with the pinned compiler;
-8. has `Lean/TrustAudit.lean` discover **every exported theorem** in the `OPTFormal.` namespace from Lean's imported module metadata;
-9. runs `Lean.collectAxioms` on every discovered theorem and fails inside Lean if any dependency lies outside the explicit `propext` allowlist;
-10. emits the completion marker only after the dynamic theorem-kind and axiom checks finish.
+2. always verifies the three constructed v1 formal-model files against their pinned Git blob identities;
+3. during PR #2 only, rejects modifications to the inherited v1.0.0 surface outside the new formalization files;
+4. verifies the exact `lean-toolchain` declaration;
+5. downloads Lean 4.33.1 from the official Lean release and verifies its SHA-256 before use;
+6. rejects `sorry`, `admit`, user `axiom`/`constant` declarations, and `unsafe` in Lean source outside inert comments/string/character-literal text;
+7. self-tests the source scanner against interpolation-body bypasses, nested/message interpolators, and character literals containing interpolation-closing braces;
+8. builds the library with the pinned compiler;
+9. has `Lean/TrustAudit.lean` discover every exported `OPTFormal.*` declaration from Lean's imported module metadata;
+10. uses `Lean.Meta.isProp` to select every exported proposition-valued declaration, including proof-returning definitions rather than only `.thmInfo` declarations;
+11. runs `Lean.collectAxioms` on every discovered logical export and fails inside Lean if any dependency lies outside the explicit `propext` allowlist;
+12. emits the completion marker only after the dynamic proposition-type and axiom checks finish.
 
-Because the theorem set is discovered from the compiled environment, adding a new exported theorem automatically places it under the axiom audit without maintaining a second hard-coded theorem table.
+Because the logical export set is discovered from the compiled environment, changing a proof from `theorem` syntax to a proposition-valued `def` does not escape the axiom audit.
 
 ## Local build
 
@@ -79,4 +90,4 @@ python3 scripts/check_lean_source.py Lean --self-test
 
 ## Formalization boundary
 
-PR #2 extends OPT with a formal verification layer. It does not rewrite the frozen v1.0.0 optimization records. Future OPT versions may add records or evolve the non-formal repository surface normally; if their contract changes are to be frozen formally, they should receive a new release-bound formalization rather than silently changing the meaning of the v1.0.0 model.
+PR #2 extends OPT with a formal verification layer. It does not rewrite the frozen v1.0.0 optimization records. Future OPT versions may add records or separately versioned formal modules normally; they must not mutate the pinned v1 formal model. If a future contract is to be frozen formally, it should receive its own release-bound module rather than silently changing the meaning of the v1.0.0 model.
