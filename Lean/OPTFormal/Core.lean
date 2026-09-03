@@ -17,17 +17,16 @@ inductive ClaimScope where
   deriving DecidableEq, Repr
 
 /--
-Whether an evidence status may support a measured claim at a given scope.
+Whether source evidence may retain a measured claim at a given scope.
 
-Historical observations may be retained for verified mechanisms even when their
-original benchmark context is incomplete. Transferable targets require stronger
-evidence and are deliberately not inferred from the frozen v1.0.0 mechanism or
-environment-specific statuses.
+Historical observations may be retained for verified source mechanisms even when
+their original benchmark context is incomplete. No source-project status by
+itself authorizes a transferable target-machine benchmark claim.
 -/
 def measuredClaimAllowed : EvidenceStatus → ClaimScope → Bool
   | .verifiedMechanism, .historicalObservation => true
   | .verifiedEnvironmentSpecific, .historicalObservation => true
-  | .verified, _ => true
+  | .verified, .historicalObservation => true
   | _, _ => false
 
 theorem sourceCandidateCannotSupportMeasuredClaim
@@ -56,6 +55,40 @@ theorem verifiedEnvironmentSpecificSupportsHistoricalObservation :
 
 theorem verifiedEnvironmentSpecificDoesNotSupportTransferableTarget :
     measuredClaimAllowed .verifiedEnvironmentSpecific .transferableTarget = false := rfl
+
+theorem verifiedSupportsHistoricalObservation :
+    measuredClaimAllowed .verified .historicalObservation = true := rfl
+
+theorem evidenceStatusAloneNeverSupportsTransferableTarget
+    (status : EvidenceStatus) :
+    measuredClaimAllowed status .transferableTarget = false := by
+  cases status <;> rfl
+
+/-- Target-machine evidence required before promoting a source observation to a target claim. -/
+structure TargetContextEvidence where
+  benchmarkMeasured : Prop
+  correctnessValidated : Prop
+  provenanceBound : Prop
+
+/-- The target environment has its own measurement, correctness, and provenance evidence. -/
+def TargetContextReady (e : TargetContextEvidence) : Prop :=
+  e.benchmarkMeasured ∧ e.correctnessValidated ∧ e.provenanceBound
+
+/--
+A transferable benchmark claim requires both admissible source evidence and an
+explicitly validated target context. Source evidence status alone is never enough.
+-/
+def TransferableClaimAllowed
+    (status : EvidenceStatus)
+    (target : TargetContextEvidence) : Prop :=
+  measuredClaimAllowed status .historicalObservation = true ∧
+  TargetContextReady target
+
+theorem transferableClaimRequiresTargetContext
+    {status : EvidenceStatus}
+    {target : TargetContextEvidence}
+    (h : TransferableClaimAllowed status target) :
+    TargetContextReady target := h.2
 
 /-- Minimal semantic/performance assessment of a proposed optimization. -/
 structure OptimizationAssessment where
