@@ -105,4 +105,16 @@ jobs:
           audit="$RUNNER_TEMP/opt-formal-audit.txt"
           "$LEAN_HOME/bin/lake" env lean Lean/TrustAudit.lean | tee "$audit"
           grep -Fq 'OPT_FORMAL_AUDIT_COMPLETE release=v1.0.0 records=5' "$audit"
+
+          # The current theorem surface is constructive except where Lean's
+          # core proposition-extensionality axiom is introduced by elaboration.
+          # Fail closed if any other axiom appears in a theorem dependency list.
+          unexpected="$(grep -F 'depends on axioms:' "$audit" | grep -vF 'depends on axioms: [propext]' || true)"
+          if [ -n "$unexpected" ]; then
+            echo 'Unexpected theorem axiom dependency:' >&2
+            printf '%s\n' "$unexpected" >&2
+            exit 1
+          fi
+
+          echo 'LEAN_AXIOM_ALLOWLIST_OK allowed=propext'
           echo 'LEAN_FORMALIZATION_OK release=v1.0.0 records=5'
