@@ -32,14 +32,14 @@ from .common import (
 
 
 class _BoundedZipLzmaDecompressor:
-    """ZIP method-14 LZMA decoder with max-length output enforcement."""
+    """ZIP method-14 LZMA decoder with output and workspace limits."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_dictionary_bytes: int) -> None:
         self._header = bytearray()
         self._decoder: lzma.LZMADecompressor | None = None
+        self._max_dictionary_bytes = max_dictionary_bytes
 
-    @staticmethod
-    def _filters(properties: bytes) -> list[dict[str, int]]:
+    def _filters(self, properties: bytes) -> list[dict[str, int]]:
         if len(properties) != 5:
             raise MemberFormatError("unsupported LZMA property length")
         encoded = properties[0]
@@ -50,6 +50,11 @@ class _BoundedZipLzmaDecompressor:
         lp = remainder % 5
         pb = remainder // 5
         dictionary_size = int.from_bytes(properties[1:5], "little") or 1
+        if dictionary_size > self._max_dictionary_bytes:
+            raise MemberFormatError(
+                "LZMA dictionary size exceeds limit "
+                f"observed={dictionary_size} limit={self._max_dictionary_bytes}"
+            )
         return [{
             "id": lzma.FILTER_LZMA1,
             "dict_size": dictionary_size,
@@ -93,7 +98,9 @@ class _BoundedZipLzmaDecompressor:
 
 
 def _decode_local_filename(zf: ZipFile, info: ZipInfo, flags: int, raw: bytes) -> str:
-    encoding = "utf-8" if flags & 0x800 else (getattr(zf, "metadata_encoding", None) or "cp437")
+    encoding = "utf-8" if flags & 0x800 else (
+        getattr(zf, "metadata_encoding", None) or "cp437"
+    )
     try:
         decoded = raw.decode(encoding, errors="strict")
     except (LookupError, UnicodeDecodeError) as exc:
@@ -115,7 +122,9 @@ def read_member_bounded(
     state: InventoryState,
 ) -> bytes | None:
     """Read one member without trusting declared uncompressed size."""
-    global_remaining = args.max_total_uncompressed_bytes - state.actual_decompressed_bytes
+    global_remaining = (
+        args.max_total_uncompressed_bytes - state.actual_decompressed_bytes
+    )
     if global_remaining < 0:
         mark_incomplete(
             state,
@@ -126,7 +135,9 @@ def read_member_bounded(
         return None
     output_limit = min(member_limit, global_remaining)
     limit_reason = (
-        "actual_uncompressed_budget" if global_remaining <= member_limit else "member_output_limit"
+        "actual_uncompressed_budget"
+        if global_remaining <= member_limit
+        else "member_output_limit"
     )
     if info.file_size > member_limit:
         mark_incomplete(
@@ -138,14 +149,18 @@ def read_member_bounded(
     if info.compress_size > args.max_compressed_member_bytes:
         mark_incomplete(
             state,
-            f"compressed_member_size member={member_label} size={info.compress_size} "
+            f"compressed_member_size member={member_label} "
+            f"size={info.compress_size} "
             f"limit={args.max_compressed_member_bytes}",
         )
         return None
 
     fp = zf.fp
     if fp is None:
-        mark_incomplete(state, f"read_error member={member_label} error=closed_archive")
+        mark_incomplete(
+            state,
+            f"read_error member={member_label} error=closed_archive",
+        )
         return None
 
     produced = 0
@@ -171,13 +186,16 @@ def read_member_bounded(
         fixed = read_exact(fp, LOCAL_FIXED_SIZE)
         if fixed[:4] != LOCAL_SIGNATURE:
             raise MemberFormatError("local header signature")
+
         local_flags = struct.unpack_from("<H", fixed, 6)[0]
         local_method = struct.unpack_from("<H", fixed, 8)[0]
         filename_len, extra_len = struct.unpack_from("<HH", fixed, 26)
+
         if local_flags & 0x1:
             raise MemberFormatError("encrypted local member")
         if local_method != info.compress_type:
             raise MemberFormatError("compression method mismatch")
+
         relevant_flags = 0x1 | 0x8 | 0x800
         if info.compress_type == ZIP_LZMA:
             relevant_flags |= 0x2
@@ -187,32 +205,56 @@ def read_member_bounded(
         local_filename_raw = read_exact(fp, filename_len)
         _decode_local_filename(zf, info, local_flags, local_filename_raw)
 
-        data_offset = info.header_offset + LOCAL_FIXED_SIZE + filename_len + extra_len
+        data_offset = (
+            info.header_offset + LOCAL_FIXED_SIZE + filename_len + extra_len
+        )
         data_end = data_offset + info.compress_size
         archive_size = stream_size(fp)
-        data_ceiling = min(archive_size, getattr(zf, "start_dir", archive_size))
-        if data_offset < 0 or data_end > data_ceiling:
+        start_dir = getattr(zf, "start_dir", archive_size)
+        member_end = getattr(info, "_end_offset", None)
+        if not isinstance(member_end, int):
+            raise MemberFormatError("missing member end boundary")
+        data_ceiling = min(archive_size, start_dir, member_end)
+        if data_offset < 0 or data_offset > member_end:
+            raise MemberFormatError("compressed data offset")
+        if data_end > member_end:
+            raise MemberFormatError("overlapped entry")
+        if data_end > data_ceiling:
             raise MemberFormatError("compressed data bounds")
+
         fp.seek(data_offset)
         compressed_remaining = info.compress_size
 
         if info.compress_type == ZIP_STORED:
             while compressed_remaining:
-                chunk = read_exact(fp, min(READ_CHUNK, compressed_remaining))
+                chunk = read_exact(
+                    fp,
+                    min(READ_CHUNK, compressed_remaining),
+                )
                 compressed_remaining -= len(chunk)
                 emit(chunk[:room()])
 
         elif info.compress_type == ZIP_DEFLATED:
             decoder = zlib.decompressobj(-15)
             while compressed_remaining:
-                pending = read_exact(fp, min(READ_CHUNK, compressed_remaining))
+                pending = read_exact(
+                    fp,
+                    min(READ_CHUNK, compressed_remaining),
+                )
                 compressed_remaining -= len(pending)
                 while pending:
                     before = len(pending)
-                    emit(decoder.decompress(pending, max_length=room()))
+                    emit(
+                        decoder.decompress(
+                            pending,
+                            max_length=room(),
+                        )
+                    )
                     pending = decoder.unconsumed_tail
                     if pending and len(pending) == before:
-                        raise MemberFormatError("deflate made no progress")
+                        raise MemberFormatError(
+                            "deflate made no progress"
+                        )
             if not decoder.eof:
                 emit(decoder.decompress(b"", max_length=room()))
             if not decoder.eof or decoder.unused_data:
@@ -221,62 +263,89 @@ def read_member_bounded(
         elif info.compress_type == ZIP_BZIP2:
             decoder = bz2.BZ2Decompressor()
             while compressed_remaining:
-                pending = read_exact(fp, min(READ_CHUNK, compressed_remaining))
+                pending = read_exact(
+                    fp,
+                    min(READ_CHUNK, compressed_remaining),
+                )
                 compressed_remaining -= len(pending)
                 while True:
-                    piece = decoder.decompress(pending, max_length=room())
+                    piece = decoder.decompress(
+                        pending,
+                        max_length=room(),
+                    )
                     emit(piece)
                     pending = b""
                     if decoder.eof:
                         if decoder.unused_data or compressed_remaining:
-                            raise MemberFormatError("bzip2 trailing compressed data")
+                            raise MemberFormatError(
+                                "bzip2 trailing compressed data"
+                            )
                         break
                     if decoder.needs_input:
                         break
                     if not piece:
-                        raise MemberFormatError("bzip2 made no progress")
+                        raise MemberFormatError(
+                            "bzip2 made no progress"
+                        )
                 if decoder.eof:
                     break
             if not decoder.eof:
                 raise MemberFormatError("bzip2 stream boundary")
 
         elif info.compress_type == ZIP_LZMA:
-            decoder = _BoundedZipLzmaDecompressor()
+            decoder = _BoundedZipLzmaDecompressor(
+                args.max_lzma_dictionary_bytes
+            )
             while compressed_remaining:
-                pending = read_exact(fp, min(READ_CHUNK, compressed_remaining))
+                pending = read_exact(
+                    fp,
+                    min(READ_CHUNK, compressed_remaining),
+                )
                 compressed_remaining -= len(pending)
                 while True:
-                    piece = decoder.decompress(pending, max_length=room())
+                    piece = decoder.decompress(
+                        pending,
+                        max_length=room(),
+                    )
                     emit(piece)
                     pending = b""
                     if decoder.eof:
                         if decoder.unused_data or compressed_remaining:
-                            raise MemberFormatError("LZMA trailing compressed data")
+                            raise MemberFormatError(
+                                "LZMA trailing compressed data"
+                            )
                         break
                     if decoder.needs_input:
                         break
                     if not piece:
-                        raise MemberFormatError("LZMA made no progress")
+                        raise MemberFormatError(
+                            "LZMA made no progress"
+                        )
                 if decoder.eof:
                     break
             eos_marker_required = bool(local_flags & 0x2)
             if not decoder.eof and eos_marker_required:
                 raise MemberFormatError("LZMA stream boundary")
         else:
-            raise MemberFormatError(f"unsupported compression method {info.compress_type}")
+            raise MemberFormatError(
+                f"unsupported compression method {info.compress_type}"
+            )
 
     except OutputLimitExceeded:
         state.actual_decompressed_bytes += produced
         mark_incomplete(
             state,
-            f"{limit_reason} member={member_label} observed_at_least={produced} "
-            f"member_limit={member_limit} total_limit={args.max_total_uncompressed_bytes}",
+            f"{limit_reason} member={member_label} "
+            f"observed_at_least={produced} "
+            f"member_limit={member_limit} "
+            f"total_limit={args.max_total_uncompressed_bytes}",
         )
         return None
     except (
         BadZipFile,
         EOFError,
         LargeZipFile,
+        MemoryError,
         OSError,
         RuntimeError,
         UnicodeDecodeError,
@@ -286,7 +355,11 @@ def read_member_bounded(
         zlib.error,
     ) as exc:
         state.actual_decompressed_bytes += produced
-        mark_incomplete(state, f"read_error member={member_label} error={type(exc).__name__}")
+        mark_incomplete(
+            state,
+            f"read_error member={member_label} "
+            f"error={type(exc).__name__}",
+        )
         return None
     finally:
         try:
@@ -303,6 +376,16 @@ def read_member_bounded(
         )
         return None
     if (crc & 0xFFFFFFFF) != info.CRC:
-        mark_incomplete(state, f"read_error member={member_label} error=crc_mismatch")
+        mark_incomplete(
+            state,
+            f"read_error member={member_label} error=crc_mismatch",
+        )
         return None
-    return b"".join(parts)
+    try:
+        return b"".join(parts)
+    except MemoryError:
+        mark_incomplete(
+            state,
+            f"read_error member={member_label} error=MemoryError",
+        )
+        return None

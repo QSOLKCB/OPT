@@ -31,6 +31,7 @@ jobs:
             --max-total-uncompressed-bytes=1073741824 \
             --max-central-directory-bytes=134217728 \
             --max-compressed-member-bytes=134217728 \
+            --max-lzma-dictionary-bytes=67108864 \
             --max-text-bytes=16777216 \
             --max-hits=100000 \
             > "$output" || status=$?
