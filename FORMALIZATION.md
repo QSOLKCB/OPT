@@ -11,7 +11,13 @@ This repository's `Lean/` package formalizes the **contract invariants** frozen 
 
 CI independently verifies that the Git tag resolves to the frozen merge commit. During PR #2 only, CI additionally proves that the original v1.0.0 repository surface is unchanged outside the new formalization/trust files. That construction-time check is deliberately not a permanent freeze on later OPT releases.
 
-The constructed v1 formal model itself is permanently content-pinned by Git history. The workflow does **not** keep editable expected blob hashes beside the check. Instead it locates the first ancestor commit after v1.0.0 that established the `FORMAL_V1_MODEL_BLOBS_OK files=3` gate, reads the three expected blobs from that historical commit, and compares the current `HEAD:<path>` blobs against them:
+The constructed v1 formal model itself is permanently content-pinned by canonical Git history. The workflow does **not** keep editable expected blob hashes beside the check. Instead it searches only a **first-parent lineage** for the commit that established the `FORMAL_V1_MODEL_BLOBS_OK files=3` gate, reads the three expected blobs from that commit, and compares the current `HEAD:<path>` blobs against them:
+
+- during construction of PR #2, the lineage tip is the actual PR head rather than GitHub's synthetic merge commit;
+- after PR #2 lands, the lineage tip is protected `origin/main`;
+- merged side-parent history is therefore not eligible to replace the v1 baseline.
+
+The pinned files are:
 
 - `Lean/OPTFormal/Core.lean`
 - `Lean/OPTFormal/FrozenV100.lean`
@@ -68,21 +74,22 @@ Data-valued declarations are not ignored by the trust audit. Every declaration o
 The formal package has no third-party Lean dependencies and no mathlib dependency graph. CI:
 
 1. always checks that `v1.0.0` resolves to the frozen merge commit and that the current revision descends from it;
-2. derives the frozen v1 formal-model blobs from the first historical ancestor that established the three-file blob gate, then compares current committed blobs against that external historical baseline;
-3. during PR #2 only, rejects modifications to the inherited v1.0.0 surface outside the new formalization files;
-4. verifies the exact `lean-toolchain` declaration;
-5. downloads Lean 4.33.1 from the official Lean release and verifies its SHA-256 before use;
-6. rejects `sorry`, direct `sorryAx`, `admit`, user `axiom`/`constant` declarations, and `unsafe` in Lean source outside inert comments, ordinary strings, raw strings, character literals, and guillemet-quoted identifiers;
-7. self-tests the source scanner against interpolation-body bypasses, nested/message interpolators, character literals containing interpolation-closing braces, hash-delimited raw strings, multiline raw strings, raw-string/comment-marker confusion, and quoted identifiers containing comment syntax;
-8. checks that the unpinned `Lean/OPTFormalAll.lean` audit root imports every current module under `Lean/OPTFormal/`, including recursively nested or separately versioned modules;
-9. builds both the pinned `OPTFormal` library and the unpinned `OPTFormalAll` audit root with the pinned compiler;
-10. has `Lean/TrustAudit.lean` select declarations by **originating module**, covering `OPTFormal`, every `OPTFormal.*` source module, and `OPTFormalAll` itself regardless of declaration namespace;
-11. rejects any primitive `.axiomInfo` declaration originating in that audited module set;
-12. runs `Lean.collectAxioms` on **every declaration** in the audited module set and fails if any dependency lies outside the explicit `propext` allowlist;
-13. uses `Lean.Meta.isProp` only to classify/count proposition-valued logical exports after the full declaration-level trust audit has already passed;
-14. emits the completion marker only after audit-root coverage, full-declaration axiom checking, logical-export classification, and the allowlist checks finish.
+2. derives the frozen v1 formal-model blobs from the commit that established the three-file blob gate on the canonical **first-parent** lineage, then compares current committed blobs against that baseline;
+3. uses the actual PR #2 head while constructing this PR, and protected `origin/main` thereafter, so side-parent merge history cannot replace the anchor;
+4. during PR #2 only, rejects modifications to the inherited v1.0.0 surface outside the new formalization files;
+5. verifies the exact `lean-toolchain` declaration;
+6. downloads Lean 4.33.1 from the official Lean release and verifies its SHA-256 before use;
+7. rejects `sorry`, direct `sorryAx`, `admit`, user `axiom`/`constant` declarations, and `unsafe` in Lean source outside inert comments, ordinary strings, raw strings, character literals, and guillemet-quoted identifiers;
+8. self-tests the source scanner against interpolation-body bypasses, nested/message interpolators, character literals containing interpolation-closing braces, hash-delimited raw strings, multiline raw strings, raw-string/comment-marker confusion, and quoted identifiers containing comment syntax;
+9. checks that the unpinned `Lean/OPTFormalAll.lean` audit root imports every current module under `Lean/OPTFormal/`, including recursively nested or separately versioned modules;
+10. builds both the pinned `OPTFormal` library and the unpinned `OPTFormalAll` audit root with the pinned compiler;
+11. has `Lean/TrustAudit.lean` select declarations by **originating module**, covering `OPTFormal`, every `OPTFormal.*` source module, and `OPTFormalAll` itself regardless of declaration namespace;
+12. rejects any primitive `.axiomInfo` declaration originating in that audited module set;
+13. runs `Lean.collectAxioms` on **every declaration** in the audited module set and fails if any dependency lies outside the explicit `propext` allowlist;
+14. uses `Lean.Meta.isProp` only to classify/count proposition-valued logical exports after the full declaration-level trust audit has already passed;
+15. emits the completion marker only after audit-root coverage, full-declaration axiom checking, logical-export classification, and the allowlist checks finish.
 
-Because CI checks the audit root against the on-disk module set, adding a new `Lean/OPTFormal/FrozenV200.lean`-style module without importing it into `OPTFormalAll` fails before audit completion. Because declarations are selected by their origin module rather than namespace, a future module cannot hide a proof in the root namespace or an alternate namespace. Because axiom dependencies are checked before Prop filtering, generated or data-valued primitive proof escapes do not receive a separate trust lane.
+Because CI checks the audit root against the on-disk module set, adding a new `Lean/OPTFormal/FrozenV200.lean`-style module without importing it into `OPTFormalAll` fails before audit completion. Because declarations are selected by their origin module rather than namespace, a future module cannot hide a proof in the root namespace or an alternate namespace. Because axiom dependencies are checked before Prop filtering, generated or data-valued primitive proof escapes do not receive a separate trust lane. Because the v1 anchor is selected only from first-parent history, an older marker on a merged side branch cannot become the reference baseline.
 
 ## Local build
 
@@ -94,4 +101,4 @@ lake env lean Lean/TrustAudit.lean
 
 ## Formalization boundary
 
-PR #2 extends OPT with a formal verification layer. It does not rewrite the frozen v1.0.0 optimization records. Future OPT versions may add records or separately versioned formal modules normally; they must not mutate the historically anchored v1 formal model. New formal modules must be registered in the unpinned `OPTFormalAll` root so the persistent audit covers them. If a future contract is to be frozen formally, it should receive its own release-bound module rather than silently changing the meaning of the v1.0.0 model.
+PR #2 extends OPT with a formal verification layer. It does not rewrite the frozen v1.0.0 optimization records. Future OPT versions may add records or separately versioned formal modules normally; they must not mutate the first-parent-anchored v1 formal model. New formal modules must be registered in the unpinned `OPTFormalAll` root so the persistent audit covers them. If a future contract is to be frozen formally, it should receive its own release-bound module rather than silently changing the meaning of the v1.0.0 model.
