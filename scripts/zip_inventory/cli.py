@@ -59,6 +59,15 @@ def parse_args() -> argparse.Namespace:
         default=64 * 1024 * 1024,
     )
     parser.add_argument(
+        "--max-general-member-bytes",
+        type=positive_int,
+        default=128 * 1024 * 1024,
+        help=(
+            "maximum decompressed bytes retained for one non-text, "
+            "non-.zip member before content classification"
+        ),
+    )
+    parser.add_argument(
         "--max-total-uncompressed-bytes",
         type=positive_int,
         default=512 * 1024 * 1024,
