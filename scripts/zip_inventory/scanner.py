@@ -12,8 +12,10 @@ from .common import (
     KEYWORDS,
     TEXT_SUFFIXES,
     InventoryState,
+    bound_label,
     decode_text,
-    escape_untrusted,
+    escape_untrusted_bounded,
+    join_member_label,
     looks_textual,
     mark_incomplete,
     match_context,
@@ -80,6 +82,7 @@ def scan_text(
         return
 
     state.text_members_scanned += 1
+    safe_label = escape_untrusted_bounded(label)
     for lineno, line in enumerate(text.splitlines(), start=1):
         match = KEYWORDS.search(line)
         if match is None:
@@ -95,7 +98,7 @@ def scan_text(
             return
 
         print(
-            f"{escape_untrusted(label)}:{lineno}: "
+            f"{safe_label}:{lineno}: "
             f"{match_context(line, match)}"
         )
 
@@ -115,7 +118,7 @@ def _scan_sfx_prefix(
     if suffix in TEXT_SUFFIXES or looks_textual(prefix):
         scan_text(
             prefix,
-            f"{member_label}#sfx-prefix",
+            join_member_label(member_label, "#sfx-prefix"),
             args,
             state,
         )
@@ -129,9 +132,13 @@ def inventory_zip(
     args: object,
     state: InventoryState,
 ) -> int:
+    # Keep recursive diagnostic labels bounded before they are repeatedly
+    # composed for child entries. This prevents a legal 65 KiB filename from
+    # multiplying into gigabytes of output or string churn at deeper levels.
+    label = bound_label(label)
     state.archives_scanned += 1
     infos = zf.infolist()
-    safe_label = escape_untrusted(label)
+    safe_label = escape_untrusted_bounded(label)
     print(f"\n== members: {safe_label} depth={depth} ==")
 
     if not _validate_archive_limits(infos, args, state, label):
@@ -145,7 +152,7 @@ def inventory_zip(
     if unsafe:
         print(f"unsafe_members archive={safe_label}:")
         for name in unsafe:
-            print(f"  {escape_untrusted(name)}")
+            print(f"  {escape_untrusted_bounded(name)}")
         return EXIT_UNSAFE_MEMBER
 
     for info in infos:
@@ -154,18 +161,18 @@ def inventory_zip(
             if info.file_size == 0
             else 1.0 - (info.compress_size / info.file_size)
         )
-        member_label = f"{label}!/{info.filename}"
+        member_label = join_member_label(label, info.filename)
         print(
             f"{info.file_size:>10} {info.compress_size:>10} "
             f"saved={ratio:>7.1%} "
-            f"{escape_untrusted(member_label)}"
+            f"{escape_untrusted_bounded(member_label)}"
         )
 
     for info in infos:
         if state.incomplete:
             break
 
-        member_label = f"{label}!/{info.filename}"
+        member_label = join_member_label(label, info.filename)
         is_directory = info.is_dir()
         if is_directory and info.file_size != 0:
             mark_incomplete(
@@ -190,7 +197,15 @@ def inventory_zip(
         elif required_zip:
             member_limit = args.max_nested_zip_bytes
         elif suffix in TEXT_SUFFIXES:
-            member_limit = args.max_text_bytes
+            # A known-text suffix may still be a valid SFX/polyglot archive.
+            # Read it under the larger of the text and nested-ZIP budgets so
+            # preflight can classify it first. If it is ordinary text, the
+            # text cap is enforced later by ``scan_text``; if it is an SFX,
+            # only its textual prefix is subject to the text cap.
+            member_limit = max(
+                args.max_text_bytes,
+                args.max_nested_zip_bytes,
+            )
         else:
             # Unknown/general members must not inherit the nested-ZIP cap.
             # They are bounded separately until content classification decides
