@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import hashlib
 import io
 import re
@@ -40,6 +41,16 @@ WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
 EXIT_INVALID_ZIP = 2
 EXIT_UNSAFE_MEMBER = 3
 EXIT_INCOMPLETE = 4
+
+# Check UTF-32 before UTF-16 because the little-endian UTF-32 BOM starts with
+# the UTF-16LE BOM bytes.
+_BOM_ENCODINGS: tuple[tuple[bytes, str], ...] = (
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
 
 
 @dataclass(frozen=True)
@@ -143,14 +154,41 @@ def stream_size(stream: BinaryIO) -> int:
     return size
 
 
+def _bom_encoding(data: bytes) -> str | None:
+    for bom, encoding in _BOM_ENCODINGS:
+        if data.startswith(bom):
+            return encoding
+    return None
+
+
+def decode_text(data: bytes) -> str:
+    """Decode supported text, including BOM-marked UTF-16 and UTF-32."""
+    encoding = _bom_encoding(data)
+    if encoding is not None:
+        return data.decode(encoding, errors="strict")
+    return data.decode("utf-8", errors="replace")
+
+
 def looks_textual(data: bytes) -> bool:
+    """Classify a bounded text probe without rejecting split UTF-8 codepoints."""
     prefix = data[:4096]
-    if not prefix or b"\x00" in prefix:
+    if not prefix:
         return False
+
+    encoding = _bom_encoding(prefix)
+    if encoding is None and b"\x00" in prefix:
+        return False
+    if encoding is None:
+        encoding = "utf-8"
+
     try:
-        text = prefix.decode("utf-8")
-    except UnicodeDecodeError:
+        decoder = codecs.getincrementaldecoder(encoding)(errors="strict")
+        # final=False lets the decoder buffer a trailing partial multibyte
+        # sequence instead of misclassifying the entire member as binary.
+        text = decoder.decode(prefix, final=False)
+    except (LookupError, UnicodeDecodeError):
         return False
+
     allowed_controls = {"\t", "\n", "\r", "\f"}
     suspicious = sum(
         1
