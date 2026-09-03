@@ -12,6 +12,7 @@ from .common import (
     KEYWORDS,
     TEXT_SUFFIXES,
     InventoryState,
+    decode_text,
     escape_untrusted,
     looks_textual,
     mark_incomplete,
@@ -69,7 +70,15 @@ def scan_text(
         )
         return
 
-    text = raw.decode("utf-8", errors="replace")
+    try:
+        text = decode_text(raw)
+    except (LookupError, UnicodeDecodeError) as exc:
+        mark_incomplete(
+            state,
+            f"text_decode_error member={label} error={type(exc).__name__}",
+        )
+        return
+
     state.text_members_scanned += 1
     for lineno, line in enumerate(text.splitlines(), start=1):
         match = KEYWORDS.search(line)
