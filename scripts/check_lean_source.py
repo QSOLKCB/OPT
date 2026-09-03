@@ -7,7 +7,7 @@ import argparse
 import re
 from pathlib import Path
 
-FORBIDDEN = re.compile(r"\b(sorry|admit|axiom|constant|unsafe)\b")
+FORBIDDEN = re.compile(r"\b(sorryAx|sorry|admit|axiom|constant|unsafe)\b")
 INTERPOLATOR = re.compile(r"[A-Za-z_][A-Za-z0-9_']*!\"")
 RAW_STRING = re.compile(r'r(#*)"')
 
@@ -197,23 +197,25 @@ def check_file(path: Path) -> list[str]:
 
 def run_self_test() -> None:
     safe_cases = {
-        "ordinary string": 'def x := "sorry axiom constant unsafe"',
-        "line comment": "-- sorry axiom constant unsafe\ntheorem t : True := by trivial",
-        "block comment": "/- sorry /- constant -/ unsafe -/\ntheorem t : True := by trivial",
-        "interpolation literal": 'def x := s!"sorry {{constant}} {1}"',
-        "interpolation nested string": 'def x := s!"{let y := "sorry"; y}"',
+        "ordinary string": 'def x := "sorry sorryAx axiom constant unsafe"',
+        "line comment": "-- sorry sorryAx axiom constant unsafe\ntheorem t : True := by trivial",
+        "block comment": "/- sorry sorryAx /- constant -/ unsafe -/\ntheorem t : True := by trivial",
+        "interpolation literal": 'def x := s!"sorry sorryAx {{constant}} {1}"',
+        "interpolation nested string": 'def x := s!"{let y := "sorryAx"; y}"',
         "character closing brace": "def x := s!\"{let c := '}'; c}\"",
         "identifier apostrophe": "def foo' : Nat := 1",
-        "raw string": 'def x := r"sorry axiom constant unsafe"',
-        "hashed raw string": 'def x := r#"sorry "quoted" admit"#',
-        "raw string with comment marker": 'def x := r#"" -- sorry "#',
-        "multiline raw string": 'def x := r##"line one\nsorry -- constant\nline three"##',
-        "raw-like opener after identifier": 'def x := barr"sorry -- axiom"',
+        "raw string": 'def x := r"sorry sorryAx axiom constant unsafe"',
+        "hashed raw string": 'def x := r#"sorryAx "quoted" admit"#',
+        "raw string with comment marker": 'def x := r#"" -- sorryAx "#',
+        "multiline raw string": 'def x := r##"line one\nsorryAx -- constant\nline three"##',
+        "raw-like opener after identifier": 'def x := barr"sorryAx -- axiom"',
     }
     unsafe_cases = {
         "sorry interpolation": ('def x := s!"{(sorry : Nat)}"', "sorry"),
         "message interpolation": ('def x := m!"{(admit : MessageData)}"', "admit"),
         "constant declaration": ("constant untrusted : Prop", "constant"),
+        "direct sorryAx": ("def bad : Empty := sorryAx Empty true", "sorryAx"),
+        "sorryAx interpolation": ('def x := s!"{sorryAx Nat true}"', "sorryAx"),
         "nested interpolation": ('def x := s!"{s!"{(admit : Nat)}"}"', "admit"),
         "char literal before sorry": (
             "def x := s!\"{let c := '}'; (sorry : Nat)}\"",
