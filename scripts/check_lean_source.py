@@ -9,6 +9,7 @@ from pathlib import Path
 
 FORBIDDEN = re.compile(r"\b(sorry|admit|axiom|constant|unsafe)\b")
 INTERPOLATOR = re.compile(r"[A-Za-z_][A-Za-z0-9_']*!\"")
+RAW_STRING = re.compile(r'r(#*)"')
 
 
 def strip_comments_and_strings(text: str) -> str:
@@ -22,6 +23,9 @@ def strip_comments_and_strings(text: str) -> str:
 
     def ident_continuation(ch: str) -> bool:
         return ch.isalnum() or ch in "_'"
+
+    def at_token_boundary(i: int) -> bool:
+        return i == 0 or not ident_continuation(text[i - 1])
 
     def scan_line_comment(i: int) -> int:
         i += 2
@@ -64,6 +68,16 @@ def strip_comments_and_strings(text: str) -> str:
             i += 1
         raise ValueError("unterminated string literal")
 
+    def scan_raw_string(i: int, hashes: int) -> int:
+        """Skip one Lean raw string r#*"..."#* with no escape processing."""
+        closer = '"' + "#" * hashes
+        end = text.find(closer, i)
+        if end < 0:
+            raise ValueError("unterminated raw string literal")
+        for j in range(i, end):
+            keep_newline(j)
+        return end + len(closer)
+
     def scan_char_literal(i: int) -> int:
         """Skip one Lean character literal without exposing brace payloads."""
         i += 1
@@ -98,13 +112,20 @@ def strip_comments_and_strings(text: str) -> str:
                 i = scan_interpolated_string(interpolator.end())
                 continue
 
+            # Raw strings must be recognized before the ordinary quote branch.
+            # Otherwise embedded quotes/comment markers can hide later code.
+            raw = RAW_STRING.match(text, i)
+            if raw is not None and at_token_boundary(i):
+                i = scan_raw_string(raw.end(), len(raw.group(1)))
+                continue
+
             if ch == '"':
                 i = scan_plain_string(i + 1)
                 continue
 
             # Lean permits apostrophes in identifiers (for example `foo'`), so
             # only treat a quote at a token boundary as a character literal.
-            if ch == "'" and (i == 0 or not ident_continuation(text[i - 1])):
+            if ch == "'" and at_token_boundary(i):
                 i = scan_char_literal(i)
                 continue
 
@@ -183,6 +204,11 @@ def run_self_test() -> None:
         "interpolation nested string": 'def x := s!"{let y := "sorry"; y}"',
         "character closing brace": "def x := s!\"{let c := '}'; c}\"",
         "identifier apostrophe": "def foo' : Nat := 1",
+        "raw string": 'def x := r"sorry axiom constant unsafe"',
+        "hashed raw string": 'def x := r#"sorry "quoted" admit"#',
+        "raw string with comment marker": 'def x := r#"" -- sorry "#',
+        "multiline raw string": 'def x := r##"line one\nsorry -- constant\nline three"##',
+        "raw-like opener after identifier": 'def x := barr"sorry -- axiom"',
     }
     unsafe_cases = {
         "sorry interpolation": ('def x := s!"{(sorry : Nat)}"', "sorry"),
@@ -195,6 +221,18 @@ def run_self_test() -> None:
         ),
         "escaped char before admit": (
             "def x := s!\"{let c := '\\\''; (admit : Nat)}\"",
+            "admit",
+        ),
+        "raw string comment bypass": (
+            'noncomputable def bad : Empty := (r#"" -- "#, (sorry : Empty)).2',
+            "sorry",
+        ),
+        "raw string then admit": (
+            'def x := (r"a", (admit : Nat)).2',
+            "admit",
+        ),
+        "raw string brace inside interpolation": (
+            'def x := s!"{let y := r#"} -- sorry"#; (admit : Nat)}"',
             "admit",
         ),
     }

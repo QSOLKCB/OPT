@@ -1,7 +1,7 @@
 import Lean.Elab.Command
 import Lean.Meta.Basic
 import Lean.Util.CollectAxioms
-import OPTFormal
+import OPTFormalAll
 
 open Lean
 open Lean.Elab Command
@@ -11,9 +11,12 @@ private def allowedAxioms : Array Name := #[
 ]
 
 /--
-Collect every exported declaration in the OPTFormal namespace from the imported
-module graph. Private declarations use private names and therefore do not match
-the public `OPTFormal.` prefix.
+Collect every exported declaration in the OPTFormal namespace from the module
+graph reachable through the unpinned `OPTFormalAll` audit root. CI separately
+checks that this root imports every module under `Lean/OPTFormal/`.
+
+Private declarations use private names and therefore do not match the public
+`OPTFormal.` prefix.
 -/
 private def exportedDeclarations (env : Environment) : Array Name := Id.run do
   let mut targets : Array Name := #[]
@@ -63,4 +66,4 @@ run_cmd do
     for ax in axioms do
       logInfo m!"  allowed axiom: {ax}"
 
-  logInfo m!"OPT_FORMAL_AUDIT_COMPLETE release=v1.0.0 records=5 logical_exports={targets.size} logical_export_types=verified axiom_allowlist=verified"
+  logInfo m!"OPT_FORMAL_AUDIT_COMPLETE release=v1.0.0 records=5 logical_exports={targets.size} logical_export_types=verified axiom_allowlist=verified audit_root=OPTFormalAll"

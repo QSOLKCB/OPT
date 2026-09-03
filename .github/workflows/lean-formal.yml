@@ -53,7 +53,7 @@ jobs:
           check_blob() {
             path="$1"
             expected="$2"
-            actual="$(git hash-object "$path")"
+            actual="$(git rev-parse "HEAD:$path")"
             if [ "$actual" != "$expected" ]; then
               echo "Frozen v1 formal model changed: $path" >&2
               echo "  expected blob: $expected" >&2
@@ -64,7 +64,7 @@ jobs:
           check_blob Lean/OPTFormal/Core.lean "$FORMAL_CORE_BLOB_SHA"
           check_blob Lean/OPTFormal/FrozenV100.lean "$FORMAL_FROZEN_V100_BLOB_SHA"
           check_blob Lean/OPTFormal.lean "$FORMAL_ROOT_BLOB_SHA"
-          echo 'FORMAL_V1_MODEL_BLOBS_OK files=3'
+          echo 'FORMAL_V1_MODEL_BLOBS_OK files=3 source=HEAD-tree'
 
       - name: Verify PR #2 preserves frozen v1.0.0 surface
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 2 }}
@@ -73,8 +73,8 @@ jobs:
           set -euo pipefail
           # This is deliberately a one-time construction check for PR #2.
           # Future releases may evolve OPT's non-formal surface while this
-          # workflow continues to verify the historical v1.0.0 tag identity
-          # and the pinned v1 formal-model blobs above.
+          # workflow continues to verify the historical v1.0.0 tag identity,
+          # the pinned v1 formal-model blobs, and audit-root coverage.
           if ! git diff --quiet "$FROZEN_COMMIT" -- . \
             ':(exclude)Lean/**' \
             ':(exclude)FORMALIZATION.md' \
@@ -127,6 +127,48 @@ jobs:
           set -euo pipefail
           python3 scripts/check_lean_source.py Lean --self-test
 
+      - name: Verify audit root covers every formal module
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+
+          lean_root = Path("Lean")
+          module_root = lean_root / "OPTFormal"
+          audit_root = lean_root / "OPTFormalAll.lean"
+
+          expected = sorted(
+              ".".join(path.with_suffix("").relative_to(lean_root).parts)
+              for path in module_root.rglob("*.lean")
+              if path.is_file()
+          )
+          if not expected:
+              print("no OPTFormal modules found", file=sys.stderr)
+              raise SystemExit(1)
+
+          imports: list[str] = []
+          for raw_line in audit_root.read_text(encoding="utf-8").splitlines():
+              parts = raw_line.strip().split()
+              if len(parts) >= 2 and parts[0] == "import" and parts[1].startswith("OPTFormal."):
+                  imports.append(parts[1])
+          imports.sort()
+
+          if imports != expected:
+              print("Lean/OPTFormalAll.lean does not exactly cover Lean/OPTFormal modules", file=sys.stderr)
+              print("expected:", *expected, sep="\n  ", file=sys.stderr)
+              print("imports:", *imports, sep="\n  ", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"AUDIT_ROOT_COVERAGE_OK modules={len(expected)}")
+          PY
+
+          if ! grep -Fxq 'import OPTFormalAll' Lean/TrustAudit.lean; then
+            echo 'Lean/TrustAudit.lean must import the unpinned OPTFormalAll audit root' >&2
+            exit 1
+          fi
+
       - name: Build formalization
         shell: bash
         run: |
@@ -140,5 +182,5 @@ jobs:
           audit="$RUNNER_TEMP/opt-formal-audit.txt"
           "$LEAN_HOME/bin/lake" env lean Lean/TrustAudit.lean | tee "$audit"
           grep -Fq 'OPT_FORMAL_AUDIT_COMPLETE release=v1.0.0 records=5' "$audit"
-          grep -Fq 'logical_export_types=verified axiom_allowlist=verified' "$audit"
-          echo 'LEAN_FORMALIZATION_OK release=v1.0.0 records=5 logical_exports=audited'
+          grep -Fq 'logical_export_types=verified axiom_allowlist=verified audit_root=OPTFormalAll' "$audit"
+          echo 'LEAN_FORMALIZATION_OK release=v1.0.0 records=5 logical_exports=audited audit_root=covered'
