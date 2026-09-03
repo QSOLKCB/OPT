@@ -28,6 +28,7 @@ jobs:
             --max-depth=8 \
             --max-members=100000 \
             --max-nested-zip-bytes=134217728 \
+            --max-general-member-bytes=134217728 \
             --max-total-uncompressed-bytes=1073741824 \
             --max-central-directory-bytes=134217728 \
             --max-compressed-member-bytes=134217728 \
