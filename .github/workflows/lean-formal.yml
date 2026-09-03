@@ -13,6 +13,9 @@ permissions:
 env:
   FROZEN_TAG: "v1.0.0"
   FROZEN_COMMIT: "41e2fc3677469839fb298dedefd0ce72caebcc68"
+  FORMAL_CORE_BLOB_SHA: "b475c372af35c9ccbe00b9ffb96b269dcf9046a4"
+  FORMAL_FROZEN_V100_BLOB_SHA: "54679a032d1f0e83ddb1b344b9d53d1c11ea84cf"
+  FORMAL_ROOT_BLOB_SHA: "7a19560f3447ad2e8bfaedb7268be48e2c642c18"
   LEAN_VERSION: "4.33.1"
   LEAN_LINUX_SHA256: "890afd185370f85666025b883914ab4f4b339136f8c96167b69cfb62aecaf235"
   EXPECTED_LEAN_TOOLCHAIN_SHA256: "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71"
@@ -43,6 +46,26 @@ jobs:
           fi
           echo "FROZEN_IDENTITY_OK tag=$FROZEN_TAG commit=$FROZEN_COMMIT"
 
+      - name: Verify constructed v1 formal model blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_blob() {
+            path="$1"
+            expected="$2"
+            actual="$(git hash-object "$path")"
+            if [ "$actual" != "$expected" ]; then
+              echo "Frozen v1 formal model changed: $path" >&2
+              echo "  expected blob: $expected" >&2
+              echo "  actual blob:   $actual" >&2
+              exit 1
+            fi
+          }
+          check_blob Lean/OPTFormal/Core.lean "$FORMAL_CORE_BLOB_SHA"
+          check_blob Lean/OPTFormal/FrozenV100.lean "$FORMAL_FROZEN_V100_BLOB_SHA"
+          check_blob Lean/OPTFormal.lean "$FORMAL_ROOT_BLOB_SHA"
+          echo 'FORMAL_V1_MODEL_BLOBS_OK files=3'
+
       - name: Verify PR #2 preserves frozen v1.0.0 surface
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 2 }}
         shell: bash
@@ -50,7 +73,8 @@ jobs:
           set -euo pipefail
           # This is deliberately a one-time construction check for PR #2.
           # Future releases may evolve OPT's non-formal surface while this
-          # workflow continues to verify the historical v1.0.0 tag identity.
+          # workflow continues to verify the historical v1.0.0 tag identity
+          # and the pinned v1 formal-model blobs above.
           if ! git diff --quiet "$FROZEN_COMMIT" -- . \
             ':(exclude)Lean/**' \
             ':(exclude)FORMALIZATION.md' \
@@ -109,12 +133,12 @@ jobs:
           set -euo pipefail
           "$LEAN_HOME/bin/lake" build
 
-      - name: Audit every exported theorem
+      - name: Audit every exported logical declaration
         shell: bash
         run: |
           set -euo pipefail
           audit="$RUNNER_TEMP/opt-formal-audit.txt"
           "$LEAN_HOME/bin/lake" env lean Lean/TrustAudit.lean | tee "$audit"
           grep -Fq 'OPT_FORMAL_AUDIT_COMPLETE release=v1.0.0 records=5' "$audit"
-          grep -Fq 'theorem_kinds=verified axiom_allowlist=verified' "$audit"
-          echo 'LEAN_FORMALIZATION_OK release=v1.0.0 records=5 exported_theorems=audited'
+          grep -Fq 'logical_export_types=verified axiom_allowlist=verified' "$audit"
+          echo 'LEAN_FORMALIZATION_OK release=v1.0.0 records=5 logical_exports=audited'
