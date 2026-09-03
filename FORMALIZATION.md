@@ -50,7 +50,10 @@ The formal package has no third-party Lean dependencies and no mathlib dependenc
 4. downloads Lean 4.33.1 from the official Lean release and verifies its SHA-256 before use;
 5. rejects `sorry`, `admit`, user `axiom`, and `unsafe` tokens in Lean source outside comments/strings;
 6. builds the library with the pinned compiler;
-7. runs `Lean/TrustAudit.lean` to print the axiom dependencies of the exported theorem surface and require the completion marker.
+7. runs `Lean/TrustAudit.lean` to print the axiom dependencies of the exported theorem surface and require the completion marker;
+8. permits only Lean's core `propext` axiom in those exported dependencies and fails closed on any additional axiom such as `Classical.choice` or `Quot.sound`.
+
+The current audit surface contains theorems with no axioms and theorems whose only reported dependency is `propext`. No user-declared axioms are permitted.
 
 ## Local build
 
