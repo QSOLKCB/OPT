@@ -1,0 +1,12 @@
+import OPTFormal
+
+#print axioms OPTFormal.fasterButWrongIsNotOptimization
+#print axioms OPTFormal.invariantReusePreservesSemantics
+#print axioms OPTFormal.deterministicParallelPreservesScalarResult
+#print axioms OPTFormal.verifiedReuseDoesNotProveColdReconstruction
+#print axioms OPTFormal.missingErrorBoundBlocksApproximation
+#print axioms OPTFormal.composableIsSymmetric
+#print axioms OPTFormal.frozenCatalogHasNoDuplicateRecords
+#print axioms OPTFormal.suxenInventoryHitsDoNotPromoteMeasuredPerformance
+
+#eval IO.println "OPT_FORMAL_AUDIT_COMPLETE release=v1.0.0 records=5"
