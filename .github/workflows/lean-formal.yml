@@ -1,0 +1,108 @@
+name: lean-formal
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FROZEN_TAG: "v1.0.0"
+  FROZEN_COMMIT: "41e2fc3677469839fb298dedefd0ce72caebcc68"
+  LEAN_VERSION: "4.33.1"
+  LEAN_LINUX_SHA256: "890afd185370f85666025b883914ab4f4b339136f8c96167b69cfb62aecaf235"
+  EXPECTED_LEAN_TOOLCHAIN_SHA256: "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71"
+
+jobs:
+  formalization:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Verify frozen v1.0.0 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse "${FROZEN_TAG}^{commit}")"
+          if [ "$actual" != "$FROZEN_COMMIT" ]; then
+            echo "Frozen tag mismatch: expected $FROZEN_COMMIT, observed $actual" >&2
+            exit 1
+          fi
+
+          # PR #2 may add only the formal layer and its dedicated trust tooling.
+          # Every file inherited from immutable v1.0.0 must remain byte-identical.
+          if ! git diff --quiet "$FROZEN_COMMIT" -- . \
+            ':(exclude)Lean/**' \
+            ':(exclude)FORMALIZATION.md' \
+            ':(exclude)lakefile.lean' \
+            ':(exclude)lean-toolchain' \
+            ':(exclude)scripts/check_lean_source.py' \
+            ':(exclude).github/workflows/lean-formal.yml'; then
+            echo "PR modifies the frozen v1.0.0 surface:" >&2
+            git diff --name-status "$FROZEN_COMMIT" -- . \
+              ':(exclude)Lean/**' \
+              ':(exclude)FORMALIZATION.md' \
+              ':(exclude)lakefile.lean' \
+              ':(exclude)lean-toolchain' \
+              ':(exclude)scripts/check_lean_source.py' \
+              ':(exclude).github/workflows/lean-formal.yml' >&2
+            exit 1
+          fi
+          echo "FROZEN_BASELINE_OK tag=$FROZEN_TAG commit=$FROZEN_COMMIT"
+
+      - name: Verify declared Lean toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_decl_sha="$(printf 'leanprover/lean4:v%s\n' "$LEAN_VERSION" | sha256sum | awk '{print $1}')"
+          test "$runtime_decl_sha" = "$EXPECTED_LEAN_TOOLCHAIN_SHA256"
+          echo "${EXPECTED_LEAN_TOOLCHAIN_SHA256}  lean-toolchain" | sha256sum --check --strict
+
+      - name: Install hash-pinned Lean distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64"
+          archive="$RUNNER_TEMP/lean-${LEAN_VERSION}-linux.tar.zst"
+          url="https://github.com/leanprover/lean4/releases/download/v${LEAN_VERSION}/lean-${LEAN_VERSION}-linux.tar.zst"
+          curl --fail --location --proto '=https' --tlsv1.2 "$url" --output "$archive"
+          echo "${LEAN_LINUX_SHA256}  ${archive}" | sha256sum --check --strict
+          tar --zstd -xf "$archive" -C "$RUNNER_TEMP"
+
+          lean_home="$RUNNER_TEMP/lean-${LEAN_VERSION}-linux"
+          test -x "$lean_home/bin/lean"
+          test -x "$lean_home/bin/lake"
+          echo "LEAN_HOME=$lean_home" >> "$GITHUB_ENV"
+          echo "$lean_home/bin" >> "$GITHUB_PATH"
+          "$lean_home/bin/lean" --version
+          "$lean_home/bin/lake" --version
+
+      - name: Reject proof placeholders and user axioms
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_lean_source.py Lean
+
+      - name: Build formalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$LEAN_HOME/bin/lake" build
+
+      - name: Audit exported theorem surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          audit="$RUNNER_TEMP/opt-formal-audit.txt"
+          "$LEAN_HOME/bin/lake" env lean Lean/TrustAudit.lean | tee "$audit"
+          grep -Fq 'OPT_FORMAL_AUDIT_COMPLETE release=v1.0.0 records=5' "$audit"
+          echo 'LEAN_FORMALIZATION_OK release=v1.0.0 records=5'
