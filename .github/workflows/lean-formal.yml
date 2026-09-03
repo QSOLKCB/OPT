@@ -52,12 +52,13 @@ jobs:
           # derive them from the first historical commit after v1.0.0 that
           # established this blob gate. Once PR #2 is merged, that ancestor is
           # immutable without rewriting protected main history.
-          anchor="$(
-            git log --reverse --format='%H' \
-              -S'FORMAL_V1_MODEL_BLOBS_OK files=3' \
-              "$FROZEN_COMMIT..HEAD" -- .github/workflows/lean-formal.yml \
-              | head -n1
-          )"
+          anchors_file="$RUNNER_TEMP/v1-formal-anchor-candidates.txt"
+          git log --reverse --format='%H' \
+            -S'FORMAL_V1_MODEL_BLOBS_OK files=3' \
+            "$FROZEN_COMMIT..HEAD" -- .github/workflows/lean-formal.yml \
+            > "$anchors_file"
+          anchor=""
+          IFS= read -r anchor < "$anchors_file" || true
           if [ -z "$anchor" ]; then
             echo 'Unable to locate historical v1 formal-model anchor commit' >&2
             exit 1
