@@ -48,19 +48,33 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The expected blobs are NOT stored in this mutable workflow. Instead,
-          # derive them from the first historical commit after v1.0.0 that
-          # established this blob gate. Once PR #2 is merged, that ancestor is
-          # immutable without rewriting protected main history.
+          # The expected blobs are not stored in this mutable workflow. Discover
+          # the commit that established the three-file blob gate only along a
+          # canonical first-parent lineage, so merged side history cannot replace
+          # the baseline by contributing an older marker commit.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "${{ github.event.pull_request.number }}" = "2" ]; then
+            lineage_tip="${{ github.event.pull_request.head.sha }}"
+            lineage_source="pr2-head"
+          else
+            lineage_tip="$(git rev-parse origin/main)"
+            lineage_source="origin/main"
+          fi
+
+          if ! git merge-base --is-ancestor "$FROZEN_COMMIT" "$lineage_tip"; then
+            echo "Canonical lineage tip $lineage_tip does not descend from frozen v1.0.0" >&2
+            exit 1
+          fi
+
           anchors_file="$RUNNER_TEMP/v1-formal-anchor-candidates.txt"
-          git log --reverse --format='%H' \
+          git log --first-parent --reverse --format='%H' \
+            --diff-merges=first-parent \
             -S'FORMAL_V1_MODEL_BLOBS_OK files=3' \
-            "$FROZEN_COMMIT..HEAD" -- .github/workflows/lean-formal.yml \
+            "$FROZEN_COMMIT..$lineage_tip" -- .github/workflows/lean-formal.yml \
             > "$anchors_file"
           anchor=""
           IFS= read -r anchor < "$anchors_file" || true
           if [ -z "$anchor" ]; then
-            echo 'Unable to locate historical v1 formal-model anchor commit' >&2
+            echo "Unable to locate v1 formal-model anchor on canonical $lineage_source lineage" >&2
             exit 1
           fi
           if ! git merge-base --is-ancestor "$FROZEN_COMMIT" "$anchor"; then
@@ -78,6 +92,7 @@ jobs:
             actual="$(git rev-parse "HEAD:$path")"
             if [ "$actual" != "$expected" ]; then
               echo "Frozen v1 formal model changed: $path" >&2
+              echo "  lineage:       $lineage_source ($lineage_tip)" >&2
               echo "  anchor commit: $anchor" >&2
               echo "  expected blob: $expected" >&2
               echo "  actual blob:   $actual" >&2
@@ -87,7 +102,7 @@ jobs:
           check_blob Lean/OPTFormal/Core.lean
           check_blob Lean/OPTFormal/FrozenV100.lean
           check_blob Lean/OPTFormal.lean
-          echo "FORMAL_V1_MODEL_BLOBS_OK files=3 source=historical-anchor anchor=$anchor"
+          echo "FORMAL_V1_MODEL_BLOBS_OK files=3 source=first-parent-anchor lineage=$lineage_source anchor=$anchor"
 
       - name: Verify PR #2 preserves frozen v1.0.0 surface
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 2 }}
@@ -97,7 +112,7 @@ jobs:
           # This is deliberately a one-time construction check for PR #2.
           # Future releases may evolve OPT's non-formal surface while this
           # workflow continues to verify the historical v1.0.0 tag identity,
-          # the historically anchored v1 formal-model blobs, and audit-root coverage.
+          # the first-parent-anchored v1 formal-model blobs, and audit-root coverage.
           if ! git diff --quiet "$FROZEN_COMMIT" -- . \
             ':(exclude)Lean/**' \
             ':(exclude)FORMALIZATION.md' \
