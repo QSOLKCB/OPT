@@ -13,7 +13,7 @@ RAW_STRING = re.compile(r'r(#*)"')
 
 
 def strip_comments_and_strings(text: str) -> str:
-    """Blank inert comments/literals while preserving interpolated Lean expressions."""
+    """Blank inert comments/literals/quoted identifiers while preserving executable Lean syntax."""
     out = [" "] * len(text)
     n = len(text)
 
@@ -26,6 +26,17 @@ def strip_comments_and_strings(text: str) -> str:
 
     def at_token_boundary(i: int) -> bool:
         return i == 0 or not ident_continuation(text[i - 1])
+
+    def scan_quoted_identifier(i: int) -> int:
+        """Skip a guillemet-quoted Lean identifier `«... »` before comment parsing."""
+        i += 1
+        while i < n:
+            ch = text[i]
+            keep_newline(i)
+            if ch == "»":
+                return i + 1
+            i += 1
+        raise ValueError("unterminated quoted identifier")
 
     def scan_line_comment(i: int) -> int:
         i += 2
@@ -99,6 +110,13 @@ def strip_comments_and_strings(text: str) -> str:
         depth = interpolation_depth
         while i < n:
             ch = text[i]
+
+            # Quoted identifiers can legally contain `--`, `/-`, keywords, and
+            # other punctuation. Parse them before comment markers so their
+            # payload cannot blank executable syntax that follows the closing ».
+            if ch == "«":
+                i = scan_quoted_identifier(i)
+                continue
 
             if text.startswith("/-", i):
                 i = scan_block_comment(i)
@@ -200,8 +218,10 @@ def run_self_test() -> None:
         "ordinary string": 'def x := "sorry sorryAx axiom constant unsafe"',
         "line comment": "-- sorry sorryAx axiom constant unsafe\ntheorem t : True := by trivial",
         "block comment": "/- sorry sorryAx /- constant -/ unsafe -/\ntheorem t : True := by trivial",
+        "quoted identifier keywords": "def «sorryAx -- /- axiom constant unsafe» : Nat := 1",
         "interpolation literal": 'def x := s!"sorry sorryAx {{constant}} {1}"',
         "interpolation nested string": 'def x := s!"{let y := "sorryAx"; y}"',
+        "quoted identifier in interpolation": 'def x := s!"{let «--» := 1; «--»}"',
         "character closing brace": "def x := s!\"{let c := '}'; c}\"",
         "identifier apostrophe": "def foo' : Nat := 1",
         "raw string": 'def x := r"sorry sorryAx axiom constant unsafe"',
@@ -216,6 +236,14 @@ def run_self_test() -> None:
         "constant declaration": ("constant untrusted : Prop", "constant"),
         "direct sorryAx": ("def bad : Empty := sorryAx Empty true", "sorryAx"),
         "sorryAx interpolation": ('def x := s!"{sorryAx Nat true}"', "sorryAx"),
+        "quoted identifier comment bypass": (
+            "def «--» : Empty := sorryAx Empty true",
+            "sorryAx",
+        ),
+        "quoted identifier block bypass": (
+            "def «/-» : Empty := sorryAx Empty true",
+            "sorryAx",
+        ),
         "nested interpolation": ('def x := s!"{s!"{(admit : Nat)}"}"', "admit"),
         "char literal before sorry": (
             "def x := s!\"{let c := '}'; (sorry : Nat)}\"",
