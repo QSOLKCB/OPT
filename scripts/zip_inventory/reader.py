@@ -30,6 +30,11 @@ from .common import (
     unsafe_member,
 )
 
+# Bits 5 and 6 change the interpretation of member data. Python's ZipFile
+# rejects compressed-patched-data and strong-encryption members; this custom
+# bounded reader must not silently decode either encoding as an ordinary stream.
+_UNSUPPORTED_GENERAL_PURPOSE_FLAGS = (1 << 5) | (1 << 6)
+
 
 class _BoundedZipLzmaDecompressor:
     """ZIP method-14 LZMA decoder with output and workspace limits."""
@@ -155,6 +160,16 @@ def read_member_bounded(
         )
         return None
 
+    # Reject central-directory semantic flags before any decoder is allocated.
+    unsupported_central = info.flag_bits & _UNSUPPORTED_GENERAL_PURPOSE_FLAGS
+    if unsupported_central:
+        mark_incomplete(
+            state,
+            f"read_error member={member_label} "
+            f"error=unsupported_flags mask=0x{unsupported_central:04x}",
+        )
+        return None
+
     fp = zf.fp
     if fp is None:
         mark_incomplete(
@@ -191,12 +206,18 @@ def read_member_bounded(
         local_method = struct.unpack_from("<H", fixed, 8)[0]
         filename_len, extra_len = struct.unpack_from("<HH", fixed, 26)
 
+        unsupported_local = local_flags & _UNSUPPORTED_GENERAL_PURPOSE_FLAGS
+        if unsupported_local:
+            raise MemberFormatError(
+                "unsupported general-purpose flags "
+                f"mask=0x{unsupported_local:04x}"
+            )
         if local_flags & 0x1:
             raise MemberFormatError("encrypted local member")
         if local_method != info.compress_type:
             raise MemberFormatError("compression method mismatch")
 
-        relevant_flags = 0x1 | 0x8 | 0x800
+        relevant_flags = 0x1 | 0x8 | 0x800 | _UNSUPPORTED_GENERAL_PURPOSE_FLAGS
         if info.compress_type == ZIP_LZMA:
             relevant_flags |= 0x2
         if (local_flags ^ info.flag_bits) & relevant_flags:
