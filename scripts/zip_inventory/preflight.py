@@ -20,22 +20,18 @@ from .common import (
 
 
 def _find_eocd(stream: BinaryIO, size: int) -> tuple[int, bytes] | None:
+    """Select the same last EOCD signature that ``ZipFile`` will consume."""
     if size < 22:
         return None
     tail_size = min(size, MAX_EOCD_SEARCH)
-    stream.seek(size - tail_size)
+    tail_start = size - tail_size
+    stream.seek(tail_start)
     tail = read_exact(stream, tail_size)
-    cursor = len(tail)
-    while True:
-        relative = tail.rfind(EOCD_SIGNATURE, 0, cursor)
-        if relative < 0:
-            return None
-        if relative + 22 <= len(tail):
-            comment_length = struct.unpack_from("<H", tail, relative + 20)[0]
-            absolute = size - tail_size + relative
-            if absolute + 22 + comment_length == size:
-                return absolute, tail[relative:relative + 22]
-        cursor = relative
+    relative = tail.rfind(EOCD_SIGNATURE)
+    if relative < 0 or relative + 22 > len(tail):
+        return None
+    absolute = tail_start + relative
+    return absolute, tail[relative:relative + 22]
 
 
 def preflight_zip_stream(
@@ -82,10 +78,21 @@ def preflight_zip_stream(
             entries_total,
             central_size,
             central_offset,
-            _comment_length,
+            comment_length,
         ) = struct.unpack_from("<4H2LH", eocd, 4)
     except struct.error:
         reject("eocd_fields")
+        return None
+
+    # Python's ZipFile selects the last EOCD signature even when it appears in
+    # bytes an earlier candidate called a comment. Do the same, then fail closed
+    # if that selected record cannot fit its own declared comment.
+    available_comment = size - (eocd_offset + 22)
+    if comment_length > available_comment:
+        reject(
+            "eocd_comment_bounds "
+            f"declared={comment_length} available={available_comment}"
+        )
         return None
 
     if disk_number != 0 or central_disk != 0 or entries_on_disk != entries_total:
@@ -95,10 +102,19 @@ def preflight_zip_stream(
         reject("zip64_unsupported")
         return None
     if central_size > args.max_central_directory_bytes:
-        reject(
-            "central_directory_size "
-            f"observed={central_size} limit={args.max_central_directory_bytes}"
+        target = (
+            "central_directory_size_outer_preflight"
+            if outer
+            else "central_directory_size_preflight"
         )
+        detail = (
+            f"observed={central_size} "
+            f"limit={args.max_central_directory_bytes}"
+        )
+        if outer:
+            mark_incomplete(state, f"{target} {detail}")
+        else:
+            mark_incomplete(state, f"{target} member={label} {detail}")
         return None
 
     prefix_bytes = eocd_offset - central_size - central_offset
