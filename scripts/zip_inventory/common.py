@@ -29,6 +29,8 @@ MAX_EOCD_SEARCH = 65535 + 22
 CENTRAL_FIXED_SIZE = 46
 LOCAL_FIXED_SIZE = 30
 READ_CHUNK = 64 * 1024
+MAX_DIAGNOSTIC_LABEL_CHARS = 512
+MAX_DIAGNOSTIC_REASON_CHARS = 1024
 
 KEYWORDS = re.compile(
     r"simd|zero[- ]?copy|lock[- ]?free|cache|caching|parallel|thread|sparse|"
@@ -100,17 +102,79 @@ def sha256_file(path: Path) -> str:
         return sha256_stream(handle)
 
 
+def _escape_char(ch: str) -> str:
+    if ch == "\\":
+        return "\\\\"
+    if unicodedata.category(ch) in {"Cc", "Cf", "Cs"}:
+        return ch.encode("unicode_escape").decode("ascii")
+    return ch
+
+
 def escape_untrusted(text: str) -> str:
     """Return terminal-safe text with control and format characters escaped."""
-    out: list[str] = []
+    return "".join(_escape_char(ch) for ch in text)
+
+
+def bound_label(text: str, width: int = MAX_DIAGNOSTIC_LABEL_CHARS) -> str:
+    """Bound an internal recursive diagnostic label while preserving both ends."""
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    marker = "..."
+    if width <= len(marker):
+        return text[:width]
+    head = (width - len(marker)) // 3
+    tail = width - len(marker) - head
+    return text[:head] + marker + text[-tail:]
+
+
+def join_member_label(parent: str, name: str) -> str:
+    """Compose one recursive member label without unbounded ancestor growth."""
+    parent = bound_label(parent)
+    name = bound_label(name)
+    return bound_label(f"{parent}!/{name}")
+
+
+def escape_untrusted_bounded(
+    text: str,
+    width: int = MAX_DIAGNOSTIC_LABEL_CHARS,
+) -> str:
+    """Escape untrusted text with bounded work and bounded rendered output."""
+    if width <= 0:
+        return ""
+    # Escaping at most ``width`` raw characters is bounded even when every
+    # character expands to a ``\\uXXXX``-style representation.
+    if len(text) <= width:
+        safe = escape_untrusted(text)
+        if len(safe) <= width:
+            return safe
+    marker = "..."
+    if width <= len(marker):
+        return marker[:width]
+
+    head_budget = (width - len(marker)) // 3
+    tail_budget = width - len(marker) - head_budget
+
+    head: list[str] = []
+    used = 0
     for ch in text:
-        if ch == "\\":
-            out.append("\\\\")
-        elif unicodedata.category(ch) in {"Cc", "Cf", "Cs"}:
-            out.append(ch.encode("unicode_escape").decode("ascii"))
-        else:
-            out.append(ch)
-    return "".join(out)
+        token = _escape_char(ch)
+        if used + len(token) > head_budget:
+            break
+        head.append(token)
+        used += len(token)
+
+    tail_reversed: list[str] = []
+    used = 0
+    for ch in reversed(text):
+        token = _escape_char(ch)
+        if used + len(token) > tail_budget:
+            break
+        tail_reversed.append(token)
+        used += len(token)
+    tail = "".join(reversed(tail_reversed))
+    return "".join(head) + marker + tail
 
 
 def normalize_member_name(name: str) -> str:
@@ -131,12 +195,18 @@ def member_suffix(name: str) -> str:
 
 def mark_invalid(state: InventoryState, reason: str) -> None:
     state.invalid.append(reason)
-    print(f"invalid_zip={escape_untrusted(reason)}")
+    print(
+        "invalid_zip="
+        f"{escape_untrusted_bounded(reason, MAX_DIAGNOSTIC_REASON_CHARS)}"
+    )
 
 
 def mark_incomplete(state: InventoryState, reason: str) -> None:
     state.incomplete.append(reason)
-    print(f"inventory_incomplete={escape_untrusted(reason)}")
+    print(
+        "inventory_incomplete="
+        f"{escape_untrusted_bounded(reason, MAX_DIAGNOSTIC_REASON_CHARS)}"
+    )
 
 
 def read_exact(stream: BinaryIO, size: int) -> bytes:
