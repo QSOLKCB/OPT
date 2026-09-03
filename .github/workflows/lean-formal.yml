@@ -1,0 +1,225 @@
+name: lean-formal
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FROZEN_TAG: "v1.0.0"
+  FROZEN_COMMIT: "41e2fc3677469839fb298dedefd0ce72caebcc68"
+  LEAN_VERSION: "4.33.1"
+  LEAN_LINUX_SHA256: "890afd185370f85666025b883914ab4f4b339136f8c96167b69cfb62aecaf235"
+  EXPECTED_LEAN_TOOLCHAIN_SHA256: "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71"
+
+jobs:
+  formalization:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Verify frozen v1.0.0 identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse "${FROZEN_TAG}^{commit}")"
+          if [ "$actual" != "$FROZEN_COMMIT" ]; then
+            echo "Frozen tag mismatch: expected $FROZEN_COMMIT, observed $actual" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$FROZEN_COMMIT" HEAD; then
+            echo "Current revision does not descend from frozen v1.0.0 commit $FROZEN_COMMIT" >&2
+            exit 1
+          fi
+          echo "FROZEN_IDENTITY_OK tag=$FROZEN_TAG commit=$FROZEN_COMMIT"
+
+      - name: Verify constructed v1 formal model blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The expected blobs are not stored in this mutable workflow. Discover
+          # the commit that established the three-file blob gate only along a
+          # canonical first-parent lineage, so merged side history cannot replace
+          # the baseline by contributing an older marker commit.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "${{ github.event.pull_request.number }}" = "2" ]; then
+            lineage_tip="${{ github.event.pull_request.head.sha }}"
+            lineage_source="pr2-head"
+          else
+            lineage_tip="$(git rev-parse origin/main)"
+            lineage_source="origin/main"
+          fi
+
+          if ! git merge-base --is-ancestor "$FROZEN_COMMIT" "$lineage_tip"; then
+            echo "Canonical lineage tip $lineage_tip does not descend from frozen v1.0.0" >&2
+            exit 1
+          fi
+
+          anchors_file="$RUNNER_TEMP/v1-formal-anchor-candidates.txt"
+          git log --first-parent --reverse --format='%H' \
+            --diff-merges=first-parent \
+            -S'FORMAL_V1_MODEL_BLOBS_OK files=3' \
+            "$FROZEN_COMMIT..$lineage_tip" -- .github/workflows/lean-formal.yml \
+            > "$anchors_file"
+          anchor=""
+          IFS= read -r anchor < "$anchors_file" || true
+          if [ -z "$anchor" ]; then
+            echo "Unable to locate v1 formal-model anchor on canonical $lineage_source lineage" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$FROZEN_COMMIT" "$anchor"; then
+            echo "Formal-model anchor $anchor does not descend from frozen v1.0.0" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$anchor" HEAD; then
+            echo "Current revision does not descend from formal-model anchor $anchor" >&2
+            exit 1
+          fi
+
+          check_blob() {
+            path="$1"
+            expected="$(git rev-parse "$anchor:$path")"
+            actual="$(git rev-parse "HEAD:$path")"
+            if [ "$actual" != "$expected" ]; then
+              echo "Frozen v1 formal model changed: $path" >&2
+              echo "  lineage:       $lineage_source ($lineage_tip)" >&2
+              echo "  anchor commit: $anchor" >&2
+              echo "  expected blob: $expected" >&2
+              echo "  actual blob:   $actual" >&2
+              exit 1
+            fi
+          }
+          check_blob Lean/OPTFormal/Core.lean
+          check_blob Lean/OPTFormal/FrozenV100.lean
+          check_blob Lean/OPTFormal.lean
+          echo "FORMAL_V1_MODEL_BLOBS_OK files=3 source=first-parent-anchor lineage=$lineage_source anchor=$anchor"
+
+      - name: Verify PR #2 preserves frozen v1.0.0 surface
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 2 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This is deliberately a one-time construction check for PR #2.
+          # Future releases may evolve OPT's non-formal surface while this
+          # workflow continues to verify the historical v1.0.0 tag identity,
+          # the first-parent-anchored v1 formal-model blobs, and audit-root coverage.
+          if ! git diff --quiet "$FROZEN_COMMIT" -- . \
+            ':(exclude)Lean/**' \
+            ':(exclude)FORMALIZATION.md' \
+            ':(exclude)lakefile.lean' \
+            ':(exclude)lean-toolchain' \
+            ':(exclude)scripts/check_lean_source.py' \
+            ':(exclude).github/workflows/lean-formal.yml'; then
+            echo "PR #2 modifies the frozen v1.0.0 surface:" >&2
+            git diff --name-status "$FROZEN_COMMIT" -- . \
+              ':(exclude)Lean/**' \
+              ':(exclude)FORMALIZATION.md' \
+              ':(exclude)lakefile.lean' \
+              ':(exclude)lean-toolchain' \
+              ':(exclude)scripts/check_lean_source.py' \
+              ':(exclude).github/workflows/lean-formal.yml' >&2
+            exit 1
+          fi
+          echo "PR2_FROZEN_SURFACE_OK commit=$FROZEN_COMMIT"
+
+      - name: Verify declared Lean toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_decl_sha="$(printf 'leanprover/lean4:v%s\n' "$LEAN_VERSION" | sha256sum | awk '{print $1}')"
+          test "$runtime_decl_sha" = "$EXPECTED_LEAN_TOOLCHAIN_SHA256"
+          echo "${EXPECTED_LEAN_TOOLCHAIN_SHA256}  lean-toolchain" | sha256sum --check --strict
+
+      - name: Install hash-pinned Lean distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64"
+          archive="$RUNNER_TEMP/lean-${LEAN_VERSION}-linux.tar.zst"
+          url="https://github.com/leanprover/lean4/releases/download/v${LEAN_VERSION}/lean-${LEAN_VERSION}-linux.tar.zst"
+          curl --fail --location --proto '=https' --tlsv1.2 "$url" --output "$archive"
+          echo "${LEAN_LINUX_SHA256}  ${archive}" | sha256sum --check --strict
+          tar --zstd -xf "$archive" -C "$RUNNER_TEMP"
+
+          lean_home="$RUNNER_TEMP/lean-${LEAN_VERSION}-linux"
+          test -x "$lean_home/bin/lean"
+          test -x "$lean_home/bin/lake"
+          echo "LEAN_HOME=$lean_home" >> "$GITHUB_ENV"
+          echo "$lean_home/bin" >> "$GITHUB_PATH"
+          "$lean_home/bin/lean" --version
+          "$lean_home/bin/lake" --version
+
+      - name: Reject proof placeholders and primitive user declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_lean_source.py Lean --self-test
+
+      - name: Verify audit root covers every formal module
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+
+          lean_root = Path("Lean")
+          module_root = lean_root / "OPTFormal"
+          audit_root = lean_root / "OPTFormalAll.lean"
+
+          expected = sorted(
+              ".".join(path.with_suffix("").relative_to(lean_root).parts)
+              for path in module_root.rglob("*.lean")
+              if path.is_file()
+          )
+          if not expected:
+              print("no OPTFormal modules found", file=sys.stderr)
+              raise SystemExit(1)
+
+          imports: list[str] = []
+          for raw_line in audit_root.read_text(encoding="utf-8").splitlines():
+              parts = raw_line.strip().split()
+              if len(parts) >= 2 and parts[0] == "import" and parts[1].startswith("OPTFormal."):
+                  imports.append(parts[1])
+          imports.sort()
+
+          if imports != expected:
+              print("Lean/OPTFormalAll.lean does not exactly cover Lean/OPTFormal modules", file=sys.stderr)
+              print("expected:", *expected, sep="\n  ", file=sys.stderr)
+              print("imports:", *imports, sep="\n  ", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"AUDIT_ROOT_COVERAGE_OK modules={len(expected)}")
+          PY
+
+          if ! grep -Fxq 'import OPTFormalAll' Lean/TrustAudit.lean; then
+            echo 'Lean/TrustAudit.lean must import the unpinned OPTFormalAll audit root' >&2
+            exit 1
+          fi
+
+      - name: Build formalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$LEAN_HOME/bin/lake" build
+
+      - name: Audit every formal declaration
+        shell: bash
+        run: |
+          set -euo pipefail
+          audit="$RUNNER_TEMP/opt-formal-audit.txt"
+          "$LEAN_HOME/bin/lake" env lean Lean/TrustAudit.lean | tee "$audit"
+          grep -Fq 'OPT_FORMAL_AUDIT_COMPLETE release=v1.0.0 records=5' "$audit"
+          grep -Fq 'logical_export_types=verified axiom_allowlist=verified audit_root=OPTFormalAll' "$audit"
+          grep -Fq 'all_declaration_axioms=verified audit_root_included=verified' "$audit"
+          echo 'LEAN_FORMALIZATION_OK release=v1.0.0 records=5 declarations=audited audit_root=covered'
