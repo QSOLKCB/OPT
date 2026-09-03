@@ -118,7 +118,7 @@ def _scan_sfx_prefix(
     if suffix in TEXT_SUFFIXES or looks_textual(prefix):
         scan_text(
             prefix,
-            join_member_label(member_label, "#sfx-prefix"),
+            bound_label(f"{member_label}#sfx-prefix"),
             args,
             state,
         )
