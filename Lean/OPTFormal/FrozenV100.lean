@@ -38,19 +38,49 @@ def frozenStatus : RecordId → EvidenceStatus
   | .par001 => .verifiedEnvironmentSpecific
   | .dsp001 => .implementedReference
 
+theorem deterministicTestRecordRetainsHistoricalObservation :
+    measuredClaimAllowed
+      (frozenStatus .py001) .historicalObservation = true := rfl
+
 theorem deterministicTestRecordDoesNotCreateTransferableBenchmarkClaim :
-    measuredClaimAllowed (frozenStatus .py001) = false := rfl
+    measuredClaimAllowed
+      (frozenStatus .py001) .transferableTarget = false := rfl
+
+theorem invariantReuseRecordRetainsHistoricalObservation :
+    measuredClaimAllowed
+      (frozenStatus .inv001) .historicalObservation = true := rfl
 
 theorem invariantReuseRecordDoesNotCreateTransferableBenchmarkClaim :
-    measuredClaimAllowed (frozenStatus .inv001) = false := rfl
+    measuredClaimAllowed
+      (frozenStatus .inv001) .transferableTarget = false := rfl
 
-theorem dspImplementedReferenceDoesNotCreateMeasuredClaim :
-    measuredClaimAllowed (frozenStatus .dsp001) = false := rfl
+theorem trustCacheRecordRetainsEnvironmentScopedObservation :
+    measuredClaimAllowed
+      (frozenStatus .lean001) .historicalObservation = true := rfl
+
+theorem trustCacheRecordDoesNotCreateTransferableBenchmarkClaim :
+    measuredClaimAllowed
+      (frozenStatus .lean001) .transferableTarget = false := rfl
+
+theorem parallelRecordRetainsEnvironmentScopedObservation :
+    measuredClaimAllowed
+      (frozenStatus .par001) .historicalObservation = true := rfl
+
+theorem parallelRecordDoesNotCreateTransferableBenchmarkClaim :
+    measuredClaimAllowed
+      (frozenStatus .par001) .transferableTarget = false := rfl
+
+theorem dspImplementedReferenceDoesNotCreateMeasuredClaim
+    (scope : ClaimScope) :
+    measuredClaimAllowed (frozenStatus .dsp001) scope = false := by
+  cases scope <;> rfl
 
 /-- The preserved SUXEN archive remains a source candidate at the frozen boundary. -/
 def suxenStatus : EvidenceStatus := .sourceCandidate
 
-theorem suxenInventoryHitsDoNotPromoteMeasuredPerformance :
-    measuredClaimAllowed suxenStatus = false := rfl
+theorem suxenInventoryHitsDoNotPromoteMeasuredPerformance
+    (scope : ClaimScope) :
+    measuredClaimAllowed suxenStatus scope = false := by
+  cases scope <;> rfl
 
 end OPTFormal

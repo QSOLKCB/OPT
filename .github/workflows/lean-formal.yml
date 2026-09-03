@@ -28,7 +28,7 @@ jobs:
           fetch-tags: true
           persist-credentials: false
 
-      - name: Verify frozen v1.0.0 baseline
+      - name: Verify frozen v1.0.0 identity
         shell: bash
         run: |
           set -euo pipefail
@@ -37,9 +37,20 @@ jobs:
             echo "Frozen tag mismatch: expected $FROZEN_COMMIT, observed $actual" >&2
             exit 1
           fi
+          if ! git merge-base --is-ancestor "$FROZEN_COMMIT" HEAD; then
+            echo "Current revision does not descend from frozen v1.0.0 commit $FROZEN_COMMIT" >&2
+            exit 1
+          fi
+          echo "FROZEN_IDENTITY_OK tag=$FROZEN_TAG commit=$FROZEN_COMMIT"
 
-          # PR #2 may add only the formal layer and its dedicated trust tooling.
-          # Every file inherited from immutable v1.0.0 must remain byte-identical.
+      - name: Verify PR #2 preserves frozen v1.0.0 surface
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 2 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This is deliberately a one-time construction check for PR #2.
+          # Future releases may evolve OPT's non-formal surface while this
+          # workflow continues to verify the historical v1.0.0 tag identity.
           if ! git diff --quiet "$FROZEN_COMMIT" -- . \
             ':(exclude)Lean/**' \
             ':(exclude)FORMALIZATION.md' \
@@ -47,7 +58,7 @@ jobs:
             ':(exclude)lean-toolchain' \
             ':(exclude)scripts/check_lean_source.py' \
             ':(exclude).github/workflows/lean-formal.yml'; then
-            echo "PR modifies the frozen v1.0.0 surface:" >&2
+            echo "PR #2 modifies the frozen v1.0.0 surface:" >&2
             git diff --name-status "$FROZEN_COMMIT" -- . \
               ':(exclude)Lean/**' \
               ':(exclude)FORMALIZATION.md' \
@@ -57,7 +68,7 @@ jobs:
               ':(exclude).github/workflows/lean-formal.yml' >&2
             exit 1
           fi
-          echo "FROZEN_BASELINE_OK tag=$FROZEN_TAG commit=$FROZEN_COMMIT"
+          echo "PR2_FROZEN_SURFACE_OK commit=$FROZEN_COMMIT"
 
       - name: Verify declared Lean toolchain
         shell: bash
@@ -86,11 +97,11 @@ jobs:
           "$lean_home/bin/lean" --version
           "$lean_home/bin/lake" --version
 
-      - name: Reject proof placeholders and user axioms
+      - name: Reject proof placeholders and primitive user declarations
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/check_lean_source.py Lean
+          python3 scripts/check_lean_source.py Lean --self-test
 
       - name: Build formalization
         shell: bash
@@ -98,23 +109,12 @@ jobs:
           set -euo pipefail
           "$LEAN_HOME/bin/lake" build
 
-      - name: Audit exported theorem surface
+      - name: Audit every exported theorem
         shell: bash
         run: |
           set -euo pipefail
           audit="$RUNNER_TEMP/opt-formal-audit.txt"
           "$LEAN_HOME/bin/lake" env lean Lean/TrustAudit.lean | tee "$audit"
           grep -Fq 'OPT_FORMAL_AUDIT_COMPLETE release=v1.0.0 records=5' "$audit"
-
-          # The current theorem surface is constructive except where Lean's
-          # core proposition-extensionality axiom is introduced by elaboration.
-          # Fail closed if any other axiom appears in a theorem dependency list.
-          unexpected="$(grep -F 'depends on axioms:' "$audit" | grep -vF 'depends on axioms: [propext]' || true)"
-          if [ -n "$unexpected" ]; then
-            echo 'Unexpected theorem axiom dependency:' >&2
-            printf '%s\n' "$unexpected" >&2
-            exit 1
-          fi
-
-          echo 'LEAN_AXIOM_ALLOWLIST_OK allowed=propext'
-          echo 'LEAN_FORMALIZATION_OK release=v1.0.0 records=5'
+          grep -Fq 'theorem_kinds=verified axiom_allowlist=verified' "$audit"
+          echo 'LEAN_FORMALIZATION_OK release=v1.0.0 records=5 exported_theorems=audited'

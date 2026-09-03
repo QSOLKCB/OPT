@@ -10,23 +10,52 @@ inductive EvidenceStatus where
   | verified
   deriving DecidableEq, Repr
 
-/-- Only evidence explicitly carrying measurement support may back a measured-performance claim. -/
-def measuredClaimAllowed : EvidenceStatus → Bool
-  | .verifiedEnvironmentSpecific => true
-  | .verified => true
-  | _ => false
+/-- Scope of a measured performance statement. -/
+inductive ClaimScope where
+  | historicalObservation
+  | transferableTarget
+  deriving DecidableEq, Repr
 
-theorem sourceCandidateCannotSupportMeasuredClaim :
-    measuredClaimAllowed .sourceCandidate = false := rfl
+/--
+Whether an evidence status may support a measured claim at a given scope.
 
-theorem proposedCannotSupportMeasuredClaim :
-    measuredClaimAllowed .proposed = false := rfl
+Historical observations may be retained for verified mechanisms even when their
+original benchmark context is incomplete. Transferable targets require stronger
+evidence and are deliberately not inferred from the frozen v1.0.0 mechanism or
+environment-specific statuses.
+-/
+def measuredClaimAllowed : EvidenceStatus → ClaimScope → Bool
+  | .verifiedMechanism, .historicalObservation => true
+  | .verifiedEnvironmentSpecific, .historicalObservation => true
+  | .verified, _ => true
+  | _, _ => false
 
-theorem implementedReferenceCannotSupportMeasuredClaim :
-    measuredClaimAllowed .implementedReference = false := rfl
+theorem sourceCandidateCannotSupportMeasuredClaim
+    (scope : ClaimScope) :
+    measuredClaimAllowed .sourceCandidate scope = false := by
+  cases scope <;> rfl
 
-theorem verifiedMechanismWithoutBenchmarkContextCannotSupportMeasuredClaim :
-    measuredClaimAllowed .verifiedMechanism = false := rfl
+theorem proposedCannotSupportMeasuredClaim
+    (scope : ClaimScope) :
+    measuredClaimAllowed .proposed scope = false := by
+  cases scope <;> rfl
+
+theorem implementedReferenceCannotSupportMeasuredClaim
+    (scope : ClaimScope) :
+    measuredClaimAllowed .implementedReference scope = false := by
+  cases scope <;> rfl
+
+theorem verifiedMechanismSupportsHistoricalObservation :
+    measuredClaimAllowed .verifiedMechanism .historicalObservation = true := rfl
+
+theorem verifiedMechanismDoesNotSupportTransferableTarget :
+    measuredClaimAllowed .verifiedMechanism .transferableTarget = false := rfl
+
+theorem verifiedEnvironmentSpecificSupportsHistoricalObservation :
+    measuredClaimAllowed .verifiedEnvironmentSpecific .historicalObservation = true := rfl
+
+theorem verifiedEnvironmentSpecificDoesNotSupportTransferableTarget :
+    measuredClaimAllowed .verifiedEnvironmentSpecific .transferableTarget = false := rfl
 
 /-- Minimal semantic/performance assessment of a proposed optimization. -/
 structure OptimizationAssessment where
@@ -52,32 +81,50 @@ theorem fasterButWrongIsNotOptimization
 /-- Contract surface that an adaptation must preserve. -/
 structure OptimizationContract where
   semanticsPreserved : Prop
+  invariantsPreserved : Prop
+  determinismPreserved : Prop
   validationPreserved : Prop
   provenancePreserved : Prop
   evidenceBoundaryPreserved : Prop
+  publicAPIPreserved : Prop
 
 /-- An adaptation is admissible only when every frozen v1.0.0 contract boundary is retained. -/
 def Admissible (c : OptimizationContract) : Prop :=
   c.semanticsPreserved ∧
+  c.invariantsPreserved ∧
+  c.determinismPreserved ∧
   c.validationPreserved ∧
   c.provenancePreserved ∧
-  c.evidenceBoundaryPreserved
+  c.evidenceBoundaryPreserved ∧
+  c.publicAPIPreserved
 
 theorem admissiblePreservesSemantics
     {c : OptimizationContract} (h : Admissible c) :
     c.semanticsPreserved := h.1
 
+theorem admissiblePreservesInvariants
+    {c : OptimizationContract} (h : Admissible c) :
+    c.invariantsPreserved := h.2.1
+
+theorem admissiblePreservesDeterminism
+    {c : OptimizationContract} (h : Admissible c) :
+    c.determinismPreserved := h.2.2.1
+
 theorem admissiblePreservesValidation
     {c : OptimizationContract} (h : Admissible c) :
-    c.validationPreserved := h.2.1
+    c.validationPreserved := h.2.2.2.1
 
 theorem admissiblePreservesProvenance
     {c : OptimizationContract} (h : Admissible c) :
-    c.provenancePreserved := h.2.2.1
+    c.provenancePreserved := h.2.2.2.2.1
 
 theorem admissiblePreservesEvidenceBoundary
     {c : OptimizationContract} (h : Admissible c) :
-    c.evidenceBoundaryPreserved := h.2.2.2
+    c.evidenceBoundaryPreserved := h.2.2.2.2.2.1
+
+theorem admissiblePreservesPublicAPI
+    {c : OptimizationContract} (h : Admissible c) :
+    c.publicAPIPreserved := h.2.2.2.2.2.2
 
 /-- Generic reference/optimized pair with a pointwise equivalence witness. -/
 structure SemanticOptimization (α β : Type) where
