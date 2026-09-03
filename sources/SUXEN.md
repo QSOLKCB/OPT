@@ -26,6 +26,7 @@ python3 scripts/inventory_zip.py suxen.zip \
   --max-depth=8 \
   --max-members=100000 \
   --max-nested-zip-bytes=134217728 \
+  --max-general-member-bytes=134217728 \
   --max-total-uncompressed-bytes=1073741824 \
   --max-central-directory-bytes=134217728 \
   --max-compressed-member-bytes=134217728 \
@@ -52,6 +53,7 @@ The scanner never extracts members. It:
 - scans textual source prefixes in outer and nested SFX/polyglot archives;
 - lists member paths and compressed/uncompressed sizes at each inspected ZIP depth;
 - recursively inspects nested ZIP payloads up to explicit depth/member/size budgets;
+- applies distinct per-member limits for known text, nested ZIP payloads and general unclassified members so the nested-ZIP cap does not reject unrelated binary assets;
 - normalizes both `/` and `\` separators before rejecting absolute and parent-traversal paths;
 - rejects compressed data that overlaps the following entry;
 - incrementally decompresses stored, DEFLATE, BZIP2 and LZMA members under actual-output limits;
@@ -70,6 +72,7 @@ Default safety budgets are intentionally conservative and can be overridden expl
 max nested depth: 4
 max members across inspected archives: 20,000
 max one nested ZIP payload: 64 MiB
+max one general unclassified member: 128 MiB
 max declared and actual uncompressed bytes: 512 MiB
 max central directory: 64 MiB
 max compressed bytes for one member: 128 MiB
