@@ -19,6 +19,9 @@ from .common import (
     read_exact,
 )
 
+ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
+ZIP64_LOCATOR_SIZE = 20
+
 
 def _find_eocd(stream: BinaryIO, size: int) -> tuple[int, bytes] | None:
     """Select the same last EOCD signature that ``ZipFile`` will consume."""
@@ -95,6 +98,28 @@ def preflight_zip_stream(
             f"declared={comment_length} available={available_comment}"
         )
         return None
+
+    # ``ZipFile`` checks for the ZIP64 locator immediately before the classic
+    # EOCD even when the classic count/size/offset fields are not sentinels, and
+    # replaces them with ZIP64 values when the locator is present. Since this
+    # scanner deliberately does not support ZIP64, reject that same locator
+    # before trusting or applying any classic EOCD resource limits.
+    if eocd_offset >= ZIP64_LOCATOR_SIZE:
+        current = stream.tell()
+        try:
+            stream.seek(eocd_offset - ZIP64_LOCATOR_SIZE)
+            locator = read_exact(stream, ZIP64_LOCATOR_SIZE)
+        except (OSError, EOFError) as exc:
+            reject(f"zip64_locator_read error={type(exc).__name__}")
+            return None
+        finally:
+            try:
+                stream.seek(current)
+            except (OSError, ValueError):
+                pass
+        if locator[:4] == ZIP64_LOCATOR_SIGNATURE:
+            reject("zip64_locator_unsupported")
+            return None
 
     if disk_number != 0 or central_disk != 0 or entries_on_disk != entries_total:
         reject("multi_disk_unsupported")
