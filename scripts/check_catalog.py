@@ -84,6 +84,10 @@ README_ROW_RE = re.compile(
     r"\s*\|[^|]*\|\s*([^|]+?)\s*\|",
     re.MULTILINE,
 )
+CATALOG_DECISION_ROW_RE = re.compile(
+    r"^\|[^|\n]*\|\s*\[(OPT-[A-Z]+-\d{3})\]\((optimizations/[^)#]+\.md)\)\s*\|",
+    re.MULTILINE,
+)
 CANONICAL_DEFINITION_PATTERNS = {
     "X": re.compile(r"^- `X` — \S"),
     "F": re.compile(r"^- `F(?: ⊆ X)?` — \S"),
@@ -301,6 +305,39 @@ if unknown_catalog_ids:
 for record_id, path in records.items():
     if record_id not in catalog_ids:
         die(f"{record_id} ({path.name}) is not mentioned in CATALOG.md")
+
+# The quick decision table is a distinct advertised decision surface. Mentions
+# in later descriptive sections must not be allowed to mask a missing table row.
+decision_lines = section_lines(catalog, "## Quick decision table")
+if not decision_lines:
+    die("CATALOG.md is missing a non-empty ## Quick decision table section")
+decision_section = "\n".join(decision_lines)
+decision_rows = CATALOG_DECISION_ROW_RE.findall(decision_section)
+decision_ids = [record_id for record_id, _rel in decision_rows]
+decision_counts = Counter(decision_ids)
+bad_decision_counts = sorted(
+    record_id for record_id, count in decision_counts.items() if count != 1
+)
+if bad_decision_counts:
+    die(
+        "CATALOG.md ## Quick decision table must index each record exactly once; "
+        f"bad row counts for: {', '.join(bad_decision_counts)}"
+    )
+missing_decision = sorted(records.keys() - decision_counts.keys())
+if missing_decision:
+    die(
+        "CATALOG.md ## Quick decision table is missing record(s): "
+        f"{', '.join(missing_decision)}"
+    )
+unknown_decision = sorted(decision_counts.keys() - records.keys())
+if unknown_decision:
+    die(
+        "CATALOG.md ## Quick decision table references unknown record(s): "
+        f"{', '.join(unknown_decision)}"
+    )
+for row_id, rel in decision_rows:
+    if record_paths.get(rel) != row_id:
+        die(f"CATALOG.md ## Quick decision table row identity mismatch for {row_id}: {rel}")
 
 problem_contract = ROOT / "OPTIMIZATION-PROBLEM.md"
 if not problem_contract.is_file():
