@@ -27,3 +27,4 @@ Machine-facing rules for agents using this repository.
 23. The three pinned v1 Lean model files are immutable historical formalization. New records do not become formally proved by association; version future formal modules separately.
 24. New post-v1 records must state status, source identity, optimization problem contract, preserved contract, validation, limitations and rollback conditions.
 25. Run `python3 scripts/check_catalog.py` after catalog changes.
+26. Treat `scripts/check_catalog.py` as the public integrity entrypoint; `scripts/check_catalog_normalizer.py` is its internal CommonMark-normalization helper and must not be invoked as a substitute gate.
