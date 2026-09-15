@@ -31,6 +31,14 @@ Partition the identifier space and choose a representation per partition accordi
 
 Jazco reports strong production-scale graph results, but OPT treats the numbers as source observations only. The portable claim is density-adaptive representation.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository benchmark has been run for this OPT record.
+- Baseline: Not established in a target repository.
+- Optimized: Not established in a target repository.
+- Speedup / memory reduction: No transferable claim; reported graph results remain historical external observations.
+- Variance / repetitions: Not available for a controlled OPT target benchmark.
+
 ## Validation
 
 Differential-test membership, union, intersection, difference and persistence against a simple canonical set implementation over sparse, dense and transition-boundary fixtures.

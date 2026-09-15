@@ -27,6 +27,14 @@ Approximation is admissible only when the contract explicitly permits it. A prev
 
 Introduce a resource ceiling and degrade only along a declared dimension: sample/cull, lower level of detail, approximate search, bounded stale data, or reduced update frequency. Make the error surface measurable and reversible.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository benchmark has been run for this OPT record.
+- Baseline: No exact target baseline has been established here.
+- Optimized: No target approximation implementation has been benchmarked here.
+- Speedup / memory reduction: No transferable claim; external production observations remain source evidence only.
+- Variance / repetitions: Not available for a controlled OPT target benchmark.
+
 ## Validation
 
 Measure error/degradation and resource savings together across ordinary, boundary and adversarial workloads. Keep an exact reference for differential evaluation where practical.

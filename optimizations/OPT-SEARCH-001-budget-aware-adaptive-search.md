@@ -28,6 +28,14 @@ Use observations to adapt future evaluations: surrogate/acquisition search for e
 
 Parallelism has an information cost: very wide batches receive less feedback between suggestions and can degenerate toward non-adaptive/random search.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository tuning study has been run for this OPT synthesis.
+- Baseline: No target comparison against manual/exhaustive/random tuning has been established.
+- Optimized: No target adaptive-search result has been established.
+- Speedup / memory reduction: No transferable claim; upstream libraries establish mechanisms, not a QSOL target win.
+- Variance / repetitions: Not available for a controlled OPT target benchmark.
+
 ## Validation
 
 Keep a deterministic search seed where practical, preserve the full trial ledger, re-evaluate finalists, and validate the selected candidate against the reference contract on held-out/repeated workloads.

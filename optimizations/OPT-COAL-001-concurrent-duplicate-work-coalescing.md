@@ -28,6 +28,14 @@ Make the first caller the owner of an in-flight operation. Equivalent callers su
 
 This differs from caching: the reusable result does not exist yet.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository benchmark has been run for this OPT record.
+- Baseline: Not established in a target repository.
+- Optimized: Not established in a target repository.
+- Speedup / memory reduction: No transferable claim; the Jazco implementation is source evidence for the mechanism.
+- Variance / repetitions: Not available for a controlled OPT target benchmark.
+
 ## Validation
 
 Stress simultaneous identical and non-identical keys; inject owner failures/timeouts; prove only one upstream evaluation occurs for a coalesced key while all callers terminate correctly.

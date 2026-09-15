@@ -27,6 +27,14 @@ Partitioning must not silently weaken uniqueness, ownership, visibility or order
 
 Factor a global coordination space into independent domains. Encode domain identity into keys/IDs or route work so each domain can advance mostly independently. Prefer a small explicit merge/aggregation boundary to a permanently hot global lock/counter/poller.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository benchmark has been run for this OPT record.
+- Baseline: Not established in a target repository.
+- Optimized: Not established in a target repository.
+- Speedup / memory reduction: No transferable claim; donor observations motivate the pattern only.
+- Variance / repetitions: Not available for a controlled OPT target benchmark.
+
 ## Validation
 
 Check global invariants across all domains, collision/duplicate behavior, rebalance/restart behavior and target-scale contention profiles.

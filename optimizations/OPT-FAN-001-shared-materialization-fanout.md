@@ -26,6 +26,14 @@ Consumers must receive the same declared representation semantics. Removing veri
 
 Perform an expensive deterministic transform once near production, persist or retain the reusable representation, and fan out/replay those bytes/objects rather than reconstructing them per consumer.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository benchmark has been run for this OPT record.
+- Baseline: Not established in a target repository.
+- Optimized: Not established in a target repository.
+- Speedup / memory reduction: No transferable claim; Jetstream observations remain external source evidence.
+- Variance / repetitions: Not available for a controlled OPT target benchmark.
+
 ## Validation
 
 Compare shared materialization against per-consumer reference output, including version changes, corruption, restart/replay and mixed consumer capabilities.

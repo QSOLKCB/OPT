@@ -27,6 +27,14 @@ Deferred work must still complete before its semantic deadline. Speculative work
 
 Execute critical dependencies first; prefetch/precompute likely-soon work only when probability and spare resources justify it; lazily defer non-critical work; avoid work with no demonstrated demand.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository benchmark has been run for this OPT record.
+- Baseline: No target critical-path profile has been established here.
+- Optimized: No target prioritization/prefetch policy has been benchmarked here.
+- Speedup / memory reduction: No transferable claim; upstream WPO material supplies patterns and measurement guidance.
+- Variance / repetitions: Not available for a controlled OPT target benchmark.
+
 ## Validation
 
 Trace the true dependency path and measure end-to-end latency, not only individual task duration. Test cold/warm, cache-hit/miss and wrong-speculation cases.

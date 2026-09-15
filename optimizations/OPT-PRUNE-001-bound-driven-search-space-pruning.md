@@ -30,6 +30,14 @@ Maintain an incumbent, partition the search space, compute cheap optimistic boun
 
 A relaxed solution is evidence for a bound, not automatically a feasible final answer.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository benchmark has been run for this OPT record.
+- Baseline: No target exhaustive or unpruned search baseline has been established here.
+- Optimized: No target branch-and-bound/pruned search result has been established here.
+- Speedup / memory reduction: No transferable claim; this record captures a classical mechanism and adaptation rules.
+- Variance / repetitions: Not available for a controlled OPT target benchmark.
+
 ## Validation
 
 For small fixtures, compare with exhaustive enumeration. Test bound soundness separately from search ordering. Record the optimality gap when stopping before exact completion.

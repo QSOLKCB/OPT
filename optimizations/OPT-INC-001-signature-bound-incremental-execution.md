@@ -31,6 +31,14 @@ Compute a deterministic signature over the effective inputs, compare it with suc
 
 Wonderbuild demonstrates the mechanism and benchmark shapes, but its historical timings and timestamp/hash choices are not transferable targets.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository benchmark has been run for this OPT record.
+- Baseline: Not established in a target repository.
+- Optimized: Not established in a target repository.
+- Speedup / memory reduction: No transferable claim. Wonderbuild observations are historical source evidence only.
+- Variance / repetitions: Not available for a controlled OPT target benchmark.
+
 ## Validation
 
 Test unchanged, changed-input, missing-output, failed-run, and corrupted/stale-state cases against a forced-fresh reference path.

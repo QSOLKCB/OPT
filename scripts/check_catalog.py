@@ -21,6 +21,7 @@ REQUIRED_V2 = {
     "## Optimization problem contract",
     "## Preserved contract",
     "## Optimization",
+    "## Before / after evidence",
     "## Validation",
     "## Target-repo adaptation",
     "## Failure modes",
@@ -52,11 +53,15 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
         if missing:
             die(f"{path.relative_to(ROOT)} missing sections: {', '.join(missing)}")
 
+# README is the human-facing record index and must contain real Markdown links.
+# CATALOG may use either links or plain/backticked record IDs; any links it does
+# contain are still validated below, while complete catalog coverage is enforced
+# independently by record ID.
 for doc_name in ("README.md", "CATALOG.md"):
     text = (ROOT / doc_name).read_text(encoding="utf-8")
     links = LINK_RE.findall(text)
-    if not links:
-        die(f"{doc_name} contains no optimization-record links")
+    if doc_name == "README.md" and not links:
+        die("README.md contains no optimization-record links")
     for rel in links:
         if not (ROOT / rel).is_file():
             die(f"broken record link in {doc_name}: {rel}")

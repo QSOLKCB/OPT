@@ -28,6 +28,14 @@ A performance gate may not incentivize weakening functional tests, correctness, 
 
 Turn a stable, reproducible performance expectation into a regression gate. Compare distributions or robust summaries where noise matters; separate machine/environment drift from code regression; keep cold/warm claims distinct.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository budget calibration has been run for this OPT record.
+- Baseline: No target baseline distribution is claimed here.
+- Optimized: Not applicable until a target repository adopts and calibrates a performance budget.
+- Speedup / memory reduction: This pattern protects performance; it does not itself claim a speedup.
+- Variance / repetitions: Must be established in the target environment before a hard threshold is promoted.
+
 ## Validation
 
 Calibrate variance before setting the threshold. Self-test the gate with known fast/slow fixtures and preserve raw samples where practical.

@@ -26,6 +26,14 @@ Moving a reduction earlier is valid only if it is semantically equivalent to the
 
 Push selective operations toward the input boundary: filter before join, cull before render, select candidate roots before expensive DSP, prune impossible simulations before full evaluation. Prefer indexed/cheap predicates to expensive composition over the full population.
 
+## Before / after evidence
+
+- Environment: No controlled target-repository benchmark has been run for this OPT record.
+- Baseline: Not established in a target repository.
+- Optimized: Not established in a target repository.
+- Speedup / memory reduction: No transferable claim; external query observations and existing sparse-evaluation patterns are source evidence only.
+- Variance / repetitions: Not available for a controlled OPT target benchmark.
+
 ## Validation
 
 Differential-test reordered pipelines against the reference, with emphasis on ties, null/missing values, boundary ordering and rare candidates.
