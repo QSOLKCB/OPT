@@ -73,6 +73,7 @@ TEMPLATE_PLACEHOLDER_LINES = {
     "What can make this optimization invalid, slower, less robust or misleading?",
     "Define the measured or semantic condition that disables/reverts the optimization.",
 }
+
 LINK_RE = re.compile(r"\[([^\]]+)\]\((optimizations/[^)#]+\.md)\)")
 ID_RE = re.compile(r"^# (OPT-[A-Z]+-\d{3}) — ")
 FILENAME_ID_RE = re.compile(r"^(OPT-[A-Z]+-\d{3})-")
@@ -90,9 +91,9 @@ CATALOG_DECISION_ROW_RE = re.compile(
 )
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
 THEMATIC_BREAK_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
-FENCE_RE = re.compile(r"^(?:```|~~~)")
 LIST_MARKER_ONLY_RE = re.compile(r"^(?:[-+*]|\d+[.)])$")
 TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
+FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 CANONICAL_DEFINITION_PATTERNS = {
     "X": re.compile(r"^- `X` — \S"),
     "F": re.compile(r"^- `F(?: ⊆ X)?` — \S"),
@@ -113,28 +114,33 @@ def strip_html_comments(text: str) -> str:
 
 
 def visible_nonfenced_lines(lines: list[str]) -> list[str]:
-    """Return rendered-ish Markdown lines, excluding comments and fenced examples."""
+    """Return rendered-ish Markdown lines, excluding comments and fenced blocks."""
     cleaned = strip_html_comments("\n".join(lines))
     visible: list[str] = []
-    fence: str | None = None
+    fence_char: str | None = None
+    fence_len = 0
+
     for raw in cleaned.splitlines():
         stripped = raw.strip()
-        if fence is not None:
-            if stripped.startswith(fence):
-                fence = None
+        if fence_char is not None:
+            close = re.fullmatch(rf"{re.escape(fence_char)}{{{fence_len},}}\s*", stripped)
+            if close is not None:
+                fence_char = None
+                fence_len = 0
             continue
-        if stripped.startswith("```"):
-            fence = "```"
+
+        opener = FENCE_OPEN_RE.match(stripped)
+        if opener is not None:
+            run = opener.group(1)
+            fence_char = run[0]
+            fence_len = len(run)
             continue
-        if stripped.startswith("~~~"):
-            fence = "~~~"
-            continue
+
         visible.append(raw)
     return visible
 
 
 def visible_text(text: str) -> str:
-    """Return visible, non-fenced Markdown text for semantic integrity checks."""
     return "\n".join(visible_nonfenced_lines(text.splitlines()))
 
 
@@ -163,12 +169,11 @@ def markdown_table_cells(line: str) -> list[str] | None:
 def extract_markdown_table(
     lines: list[str], expected_headers: tuple[str, ...], context: str
 ) -> list[str]:
-    """Extract one visible Markdown table by exact header and validate every row width."""
+    """Extract one visible table by exact header and validate every row width."""
     visible = visible_nonfenced_lines(lines)
     expected = list(expected_headers)
     for i, line in enumerate(visible):
-        cells = markdown_table_cells(line)
-        if cells != expected:
+        if markdown_table_cells(line) != expected:
             continue
         if i + 1 >= len(visible):
             die(f"{context} table has no separator row")
@@ -181,12 +186,12 @@ def extract_markdown_table(
             die(f"{context} table has an invalid separator row")
         table = [line, visible[i + 1]]
         for row in visible[i + 2 :]:
-            row_cells = markdown_table_cells(row)
-            if row_cells is None:
+            cells = markdown_table_cells(row)
+            if cells is None:
                 break
-            if len(row_cells) != len(expected):
+            if len(cells) != len(expected):
                 die(
-                    f"{context} table row has {len(row_cells)} column(s); "
+                    f"{context} table row has {len(cells)} column(s); "
                     f"expected {len(expected)}: {row.strip()}"
                 )
             table.append(row)
@@ -195,43 +200,29 @@ def extract_markdown_table(
 
 
 def is_structural_only_line(line: str) -> bool:
-    """Return true for Markdown scaffolding that does not state record content."""
-    if HEADING_RE.match(line):
+    if HEADING_RE.match(line) or THEMATIC_BREAK_RE.fullmatch(line):
         return True
-    if THEMATIC_BREAK_RE.fullmatch(line):
-        return True
-    if FENCE_RE.match(line):
-        return True
-    if LIST_MARKER_ONLY_RE.fullmatch(line):
-        return True
-    if line == ">":
+    if LIST_MARKER_ONLY_RE.fullmatch(line) or line == ">":
         return True
     cells = markdown_table_cells(line)
-    if cells is not None and cells and all(
-        TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in cells
-    ):
-        return True
-    return False
+    return bool(
+        cells
+        and all(TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in cells)
+    )
 
 
 def section_has_content(lines: list[str]) -> bool:
-    """Require record-specific rendered content, not prompts/scaffolding/examples."""
     for raw in visible_nonfenced_lines(lines):
         line = raw.strip()
-        if not line:
+        if not line or line in TEMPLATE_PLACEHOLDER_LINES:
             continue
-        if line in TEMPLATE_PLACEHOLDER_LINES:
-            continue
-        if EMPTY_LABEL_RE.match(line):
-            continue
-        if is_structural_only_line(line):
+        if EMPTY_LABEL_RE.match(line) or is_structural_only_line(line):
             continue
         return True
     return False
 
 
 def normalized_status_category(raw: str) -> str:
-    """Normalize light Markdown emphasis, then return the category before ';'."""
     plain = re.sub(r"[*_`]", "", raw).strip()
     return plain.split(";", 1)[0].strip()
 
@@ -243,7 +234,6 @@ def require_prefixed_fields(
     section: str,
     rejected_values: dict[str, str] | None = None,
 ) -> None:
-    """Require one visible selected non-empty '- Field:' row for every field."""
     visible = visible_nonfenced_lines(lines)
     for field in fields:
         prefix = f"- {field}:"
@@ -277,58 +267,54 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
     filename_match = FILENAME_ID_RE.match(path.name)
     if not filename_match:
         die(f"record filename does not begin with an OPT ID: {path.relative_to(ROOT)}")
-    filename_id = filename_match.group(1)
-    if filename_id != record_id:
+    if filename_match.group(1) != record_id:
         die(
             f"record ID mismatch: {path.relative_to(ROOT)} declares {record_id} "
-            f"but filename encodes {filename_id}"
+            f"but filename encodes {filename_match.group(1)}"
         )
-
     if record_id in records:
         die(f"duplicate record id {record_id}: {records[record_id]} and {path}")
     records[record_id] = path
 
-    status_matches = [STATUS_RE.match(line) for line in lines]
-    statuses = [m.group(1).strip() for m in status_matches if m is not None]
+    statuses = [m.group(1).strip() for line in lines if (m := STATUS_RE.match(line))]
     if len(statuses) != 1:
         die(f"{path.relative_to(ROOT)} must contain exactly one visible Status line")
     if not statuses[0]:
         die(f"{path.relative_to(ROOT)} has empty Status")
 
-    if record_id not in FROZEN_V1:
-        status_category = statuses[0].split(";", 1)[0].strip()
-        if status_category not in ALLOWED_V2_STATUS_CATEGORIES:
+    if record_id in FROZEN_V1:
+        continue
+
+    status_category = statuses[0].split(";", 1)[0].strip()
+    if status_category not in ALLOWED_V2_STATUS_CATEGORIES:
+        die(
+            f"{path.relative_to(ROOT)} uses undefined status category "
+            f"'{status_category}'"
+        )
+    status_categories[record_id] = status_category
+
+    headings = {line for line in lines if line.startswith("## ")}
+    missing = sorted(REQUIRED_V2 - headings)
+    if missing:
+        die(f"{path.relative_to(ROOT)} missing visible sections: {', '.join(missing)}")
+
+    for heading in sorted(REQUIRED_V2):
+        if not section_has_content(section_lines(text, heading)):
             die(
-                f"{path.relative_to(ROOT)} uses undefined status category "
-                f"'{status_category}'"
+                f"{path.relative_to(ROOT)} has empty/template/structural-only mandatory section {heading}"
             )
-        status_categories[record_id] = status_category
 
-        headings = {line for line in lines if line.startswith("## ")}
-        missing = sorted(REQUIRED_V2 - headings)
-        if missing:
-            die(f"{path.relative_to(ROOT)} missing visible sections: {', '.join(missing)}")
-
-        for heading in sorted(REQUIRED_V2):
-            if not section_has_content(section_lines(text, heading)):
-                die(
-                    f"{path.relative_to(ROOT)} has empty/template/structural-only mandatory section {heading}"
-                )
-
-        contract = section_lines(text, "## Optimization problem contract")
-        require_prefixed_fields(
-            path,
-            contract,
-            REQUIRED_CONTRACT_FIELDS,
-            "## Optimization problem contract",
-        )
-        require_prefixed_fields(
-            path,
-            contract,
-            REQUIRED_CLASSIFICATION_FIELDS,
-            "## Optimization problem contract",
-            rejected_values=CLASSIFICATION_TEMPLATE_VALUES,
-        )
+    contract = section_lines(text, "## Optimization problem contract")
+    require_prefixed_fields(
+        path, contract, REQUIRED_CONTRACT_FIELDS, "## Optimization problem contract"
+    )
+    require_prefixed_fields(
+        path,
+        contract,
+        REQUIRED_CLASSIFICATION_FIELDS,
+        "## Optimization problem contract",
+        rejected_values=CLASSIFICATION_TEMPLATE_VALUES,
+    )
 
 missing_frozen = sorted(FROZEN_V1 - records.keys())
 if missing_frozen:
@@ -336,14 +322,10 @@ if missing_frozen:
 
 record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in records.items()}
 
-# Validate every visible optimization-record link wherever it appears. README index
-# completeness/uniqueness is checked separately from its rendered catalog table,
-# so contextual prose links are allowed and do not count as duplicate index rows.
 for doc_name in ("README.md", "CATALOG.md"):
     text = (ROOT / doc_name).read_text(encoding="utf-8")
     rendered = visible_text(text)
-    links = LINK_RE.findall(rendered)
-    for label, rel in links:
+    for label, rel in LINK_RE.findall(rendered):
         target = ROOT / rel
         if not target.is_file():
             die(f"broken visible record link in {doc_name}: {rel}")
@@ -356,52 +338,53 @@ for doc_name in ("README.md", "CATALOG.md"):
                 f"{target_id} ({rel})"
             )
 
-    if doc_name == "README.md":
-        catalog_lines = section_lines(text, "## Catalog")
-        if not catalog_lines:
-            die("README.md is missing a non-empty visible ## Catalog section")
-        catalog_table = extract_markdown_table(
-            catalog_lines,
-            ("ID", "Optimization", "Status", "Core idea"),
-            "README.md ## Catalog",
+    if doc_name != "README.md":
+        continue
+
+    catalog_lines = section_lines(text, "## Catalog")
+    if not catalog_lines:
+        die("README.md is missing a non-empty visible ## Catalog section")
+    catalog_table = extract_markdown_table(
+        catalog_lines,
+        ("ID", "Optimization", "Status", "Core idea"),
+        "README.md ## Catalog",
+    )
+    rows = README_ROW_RE.findall("\n".join(catalog_table))
+    counts = Counter(row_id for row_id, _rel, _status in rows)
+    bad_counts = sorted(record_id for record_id, count in counts.items() if count != 1)
+    if bad_counts:
+        die(
+            "README.md ## Catalog table must index each record exactly once; "
+            f"bad row counts for: {', '.join(bad_counts)}"
         )
-        rows = README_ROW_RE.findall("\n".join(catalog_table))
-        row_ids = [row_id for row_id, _rel, _status in rows]
-        counts = Counter(row_ids)
-        bad_counts = sorted(record_id for record_id, count in counts.items() if count != 1)
-        if bad_counts:
+    missing_readme = sorted(records.keys() - counts.keys())
+    if missing_readme:
+        die(f"README.md ## Catalog table is missing record(s): {', '.join(missing_readme)}")
+    unknown_rows = sorted(counts.keys() - records.keys())
+    if unknown_rows:
+        die(f"README.md ## Catalog table references unknown record(s): {', '.join(unknown_rows)}")
+
+    row_statuses: dict[str, str] = {}
+    for row_id, rel, raw_status in rows:
+        if record_paths.get(rel) != row_id:
+            die(f"README.md ## Catalog row identity mismatch for {row_id}: {rel}")
+        if row_id in row_statuses:
+            die(f"README.md ## Catalog has duplicate status row for {row_id}")
+        row_statuses[row_id] = normalized_status_category(raw_status)
+
+    for record_id, expected_status in status_categories.items():
+        observed_status = row_statuses.get(record_id)
+        if observed_status is None:
+            die(f"README.md ## Catalog has no status cell for post-v1 record {record_id}")
+        if observed_status != expected_status:
             die(
-                "README.md ## Catalog table must index each record exactly once; "
-                f"bad row counts for: {', '.join(bad_counts)}"
+                f"README.md status mismatch for {record_id}: "
+                f"record='{expected_status}' README='{observed_status}'"
             )
-        missing_readme = sorted(records.keys() - counts.keys())
-        if missing_readme:
-            die(f"README.md ## Catalog table is missing record(s): {', '.join(missing_readme)}")
-        unknown_rows = sorted(counts.keys() - records.keys())
-        if unknown_rows:
-            die(f"README.md ## Catalog table references unknown record(s): {', '.join(unknown_rows)}")
-
-        row_statuses: dict[str, str] = {}
-        for row_id, rel, raw_status in rows:
-            if record_paths.get(rel) != row_id:
-                die(f"README.md ## Catalog row identity mismatch for {row_id}: {rel}")
-            if row_id in row_statuses:
-                die(f"README.md ## Catalog has duplicate status row for {row_id}")
-            row_statuses[row_id] = normalized_status_category(raw_status)
-
-        for record_id, expected_status in status_categories.items():
-            observed_status = row_statuses.get(record_id)
-            if observed_status is None:
-                die(f"README.md ## Catalog has no status cell for post-v1 record {record_id}")
-            if observed_status != expected_status:
-                die(
-                    f"README.md status mismatch for {record_id}: "
-                    f"record='{expected_status}' README='{observed_status}'"
-                )
 
 catalog = (ROOT / "CATALOG.md").read_text(encoding="utf-8")
-rendered_catalog = visible_text(catalog)
-catalog_ids = set(OPT_TOKEN_RE.findall(rendered_catalog))
+visible_catalog = visible_text(catalog)
+catalog_ids = set(OPT_TOKEN_RE.findall(visible_catalog))
 unknown_catalog_ids = sorted(catalog_ids - records.keys())
 if unknown_catalog_ids:
     die(f"CATALOG.md references unknown visible record ID(s): {', '.join(unknown_catalog_ids)}")
@@ -409,8 +392,6 @@ for record_id, path in records.items():
     if record_id not in catalog_ids:
         die(f"{record_id} ({path.name}) is not visibly mentioned in CATALOG.md")
 
-# The quick decision table is a distinct advertised decision surface. Mentions
-# in later descriptive sections must not be allowed to mask a missing table row.
 decision_lines = section_lines(catalog, "## Quick decision table")
 if not decision_lines:
     die("CATALOG.md is missing a non-empty visible ## Quick decision table section")
@@ -420,8 +401,7 @@ decision_table = extract_markdown_table(
     "CATALOG.md ## Quick decision table",
 )
 decision_rows = CATALOG_DECISION_ROW_RE.findall("\n".join(decision_table))
-decision_ids = [record_id for record_id, _rel in decision_rows]
-decision_counts = Counter(decision_ids)
+decision_counts = Counter(record_id for record_id, _rel in decision_rows)
 bad_decision_counts = sorted(
     record_id for record_id, count in decision_counts.items() if count != 1
 )
@@ -450,10 +430,10 @@ problem_contract = ROOT / "OPTIMIZATION-PROBLEM.md"
 if not problem_contract.is_file():
     die("OPTIMIZATION-PROBLEM.md is missing")
 problem_text = problem_contract.read_text(encoding="utf-8")
-problem_lines = visible_nonfenced_lines(problem_text.splitlines())
-if not problem_lines or problem_lines[0] != "# Optimization Problem Contract":
+problem_visible = visible_nonfenced_lines(problem_text.splitlines())
+if not problem_visible or problem_visible[0] != "# Optimization Problem Contract":
     die("OPTIMIZATION-PROBLEM.md has missing/hidden/invalid title")
-if "## Canonical contract" not in problem_lines:
+if "## Canonical contract" not in problem_visible:
     die("OPTIMIZATION-PROBLEM.md is missing visible ## Canonical contract")
 canonical = section_lines(problem_text, "## Canonical contract")
 canonical_text = "\n".join(canonical)
