@@ -8,8 +8,11 @@ or overlooks, and runs the core against that copy:
 * one-to-three spaces before ATX headings (valid CommonMark indentation),
 * optional Markdown titles on links to optimization-record Markdown files,
 * inline-code examples that resemble optimization-record links,
-* block-quoted link-reference definitions that render no substantive content, and
-* classification placeholders hidden behind rendering-only inline formatting.
+* block-quoted link-reference definitions that actually parse as definitions,
+* classification placeholders hidden behind rendering-only inline formatting,
+* generic TODO/TBD-style required-field placeholders,
+* hash-shaped source text that lacks explicit commit/revision context, and
+* type-7 raw-HTML tags that CommonMark keeps inside an already-open paragraph.
 
 The repository working tree is never modified by this normalization step.
 """
@@ -27,6 +30,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CORE_NAME = "check_catalog_core.py"
 ATX_INDENT_RE = re.compile(r"(?m)^ {1,3}(?=#{1,6}(?:[ \t]|$))")
+ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
+FENCE_LINE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
+LIST_BLOCK_RE = re.compile(r"^ {0,3}(?:[-+*]|\d+[.)])[ \t]+")
+THEMATIC_BREAK_RE = re.compile(
+    r"^ {0,3}(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
+)
 RECORD_LINK_START_RE = re.compile(
     r"\[([^\]\r\n]+)\]\((optimizations/[^\s)#]+\.md)"
 )
@@ -42,6 +51,15 @@ INLINE_HTML_TAG_RE = re.compile(
     r"(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*"
     r"(?:[ \t]*=[ \t]*(?:\"[^\"]*\"|'[^']*'|[^ \t\n\"'=<>`]+))?)*"
     r"[ \t]*/?>"
+)
+STANDALONE_HTML_TAG_RE = re.compile(
+    r"^ {0,3}(?:"
+    r"</(?P<close>[A-Za-z][A-Za-z0-9-]*)[ \t]*>"
+    r"|<(?P<open>[A-Za-z][A-Za-z0-9-]*)"
+    r"(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*"
+    r"(?:[ \t]*=[ \t]*(?:\"[^\"]*\"|'[^']*'|[^ \t\n\"'=<>`]+))?)*"
+    r"[ \t]*/?>"
+    r")[ \t]*$"
 )
 INLINE_WRAPPERS = ("**", "__", "~~", "*", "_", "`")
 CLASSIFICATION_TEMPLATE_VALUES = {
@@ -59,6 +77,44 @@ CLASSIFICATION_FIELD_RE = re.compile(
     + "|".join(re.escape(field) for field in CLASSIFICATION_TEMPLATE_VALUES)
     + r"):[ \t]*)(?P<value>.*)$"
 )
+REQUIRED_FIELD_NAMES = (
+    "X",
+    "F",
+    "f",
+    "d",
+    "C",
+    "B",
+    "S",
+    *CLASSIFICATION_TEMPLATE_VALUES.keys(),
+)
+REQUIRED_FIELD_RE = re.compile(
+    r"^(?P<prefix>- (?P<field>"
+    + "|".join(re.escape(field) for field in REQUIRED_FIELD_NAMES)
+    + r"):[ \t]*)(?P<value>.*)$"
+)
+GENERIC_PLACEHOLDER_RE = re.compile(
+    r"^(?:unknown|tbd|todo|n/?a|none|pending)(?:[.!?])?$", re.IGNORECASE
+)
+HEX_TOKEN_RE = re.compile(r"\b[0-9a-fA-F]{7,40}\b")
+EXPLICIT_COMMIT_CONTEXT_RE = re.compile(
+    r"(?:"
+    r"\b(?:commit(?:[ \t]+sha)?|sha|revision|rev)\b[^0-9A-Za-z]{0,12}"
+    r"|\b(?:pinned|inspected)[ \t]+at\b[^0-9A-Za-z]{0,12}"
+    r"|@"
+    r")$",
+    re.IGNORECASE,
+)
+HTML_BLOCK_TAGS = {
+    "address", "article", "aside", "base", "basefont", "blockquote", "body",
+    "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
+    "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+    "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head",
+    "header", "hr", "html", "iframe", "legend", "li", "link", "main", "menu",
+    "menuitem", "nav", "noframes", "ol", "optgroup", "option", "p", "param",
+    "search", "section", "summary", "table", "tbody", "td", "tfoot", "th",
+    "thead", "title", "tr", "track", "ul",
+}
+TYPE1_HTML_TAGS = {"script", "pre", "style", "textarea"}
 
 
 def _skip_whitespace(text: str, index: int) -> int:
@@ -274,21 +330,107 @@ def _strip_blockquote_prefix(line: str) -> tuple[str, bool]:
         changed = True
 
 
+def _standalone_html_tag_name(line: str) -> str | None:
+    match = STANDALONE_HTML_TAG_RE.fullmatch(line)
+    if match is None:
+        return None
+    return (match.group("open") or match.group("close")).lower()
+
+
+def _is_type7_complete_tag_line(line: str) -> bool:
+    tag = _standalone_html_tag_name(line)
+    return tag is not None and tag not in HTML_BLOCK_TAGS and tag not in TYPE1_HTML_TAGS
+
+
+def _line_can_open_or_continue_paragraph(line: str) -> bool:
+    if not line.strip():
+        return False
+    if line.startswith("\t") or line.startswith("    "):
+        return False
+    if ATX_HEADING_RE.match(line) or FENCE_LINE_RE.match(line):
+        return False
+    if THEMATIC_BREAK_RE.fullmatch(line) or LIST_BLOCK_RE.match(line):
+        return False
+    if BLOCKQUOTE_PREFIX_RE.match(line):
+        return False
+    if _standalone_html_tag_name(line) is not None or line.lstrip().startswith("<"):
+        return False
+    return True
+
+
 def canonicalize_nested_reference_definitions(text: str) -> str:
-    """Expose non-rendering quoted reference definitions to the strict core checker."""
+    """Expose only quoted reference definitions that CommonMark parses as definitions."""
     out: list[str] = []
+    paragraph_open = False
+    reference_title_expected = False
+
     for raw in text.splitlines(keepends=True):
         content = raw.rstrip("\r\n")
         ending = raw[len(content) :]
         unquoted, changed = _strip_blockquote_prefix(content)
-        stripped = unquoted.strip()
-        if changed and (
-            LINK_REFERENCE_DEFINITION_RE.fullmatch(stripped)
-            or LINK_REFERENCE_TITLE_CONTINUATION_RE.fullmatch(unquoted)
-        ):
-            out.append(unquoted + ending)
-        else:
+
+        if not changed:
+            paragraph_open = False
+            reference_title_expected = False
             out.append(raw)
+            continue
+
+        stripped = unquoted.strip()
+        if not stripped:
+            paragraph_open = False
+            reference_title_expected = False
+            out.append(raw)
+            continue
+
+        if reference_title_expected and LINK_REFERENCE_TITLE_CONTINUATION_RE.fullmatch(unquoted):
+            out.append(unquoted + ending)
+            reference_title_expected = False
+            paragraph_open = False
+            continue
+
+        if LINK_REFERENCE_DEFINITION_RE.fullmatch(stripped):
+            if paragraph_open:
+                out.append(raw)
+                reference_title_expected = False
+                paragraph_open = True
+            else:
+                out.append(unquoted + ending)
+                reference_title_expected = True
+                paragraph_open = False
+            continue
+
+        out.append(raw)
+        reference_title_expected = False
+        paragraph_open = _line_can_open_or_continue_paragraph(unquoted)
+
+    return "".join(out)
+
+
+def canonicalize_type7_html_paragraph_interruptions(text: str) -> str:
+    """Keep type-7 complete tags inline when a CommonMark paragraph is already open."""
+    out: list[str] = []
+    paragraph_open = False
+
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+
+        if not content.strip():
+            paragraph_open = False
+            out.append(raw)
+            continue
+
+        if paragraph_open and _is_type7_complete_tag_line(content):
+            # The core is deliberately source-strict and would otherwise start a type-7
+            # raw-HTML block here. Prefix only the scratch copy so it remains paragraph
+            # text, matching CommonMark's rule that type-7 blocks cannot interrupt one.
+            out.append("INLINE_HTML_CONTINUATION " + content.lstrip() + ending)
+            paragraph_open = True
+            continue
+
+        out.append(raw)
+        paragraph_open = _line_can_open_or_continue_paragraph(content)
+
     return "".join(out)
 
 
@@ -347,10 +489,54 @@ def canonicalize_classification_placeholders(text: str) -> str:
     return "".join(out)
 
 
+def canonicalize_generic_required_placeholders(text: str) -> str:
+    """Turn rendered generic placeholders into empty values so the strict core rejects them."""
+    out: list[str] = []
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+        match = REQUIRED_FIELD_RE.fullmatch(content)
+        if match is None:
+            out.append(raw)
+            continue
+        rendered = _render_placeholder_candidate(match.group("value"))
+        if GENERIC_PLACEHOLDER_RE.fullmatch(rendered):
+            out.append(match.group("prefix") + ending)
+        else:
+            out.append(raw)
+    return "".join(out)
+
+
+def _has_explicit_commit_context(prefix: str) -> bool:
+    cleaned = prefix.rstrip(" \t`*_~([{<")
+    return EXPLICIT_COMMIT_CONTEXT_RE.search(cleaned) is not None
+
+
+def canonicalize_ambiguous_commit_tokens(text: str) -> str:
+    """Break hash-shaped prose unless the token has explicit commit/revision context."""
+    out: list[str] = []
+    cursor = 0
+    for match in HEX_TOKEN_RE.finditer(text):
+        out.append(text[cursor : match.start()])
+        token = match.group(0)
+        prefix = text[max(0, match.start() - 80) : match.start()]
+        if _has_explicit_commit_context(prefix):
+            out.append(token)
+        else:
+            split_at = min(4, len(token) - 1)
+            out.append(token[:split_at] + "-" + token[split_at:])
+        cursor = match.end()
+    out.append(text[cursor:])
+    return "".join(out)
+
+
 def canonicalize_markdown(text: str, *, link_scan_document: bool) -> str:
     text = ATX_INDENT_RE.sub("", text)
     text = canonicalize_nested_reference_definitions(text)
+    text = canonicalize_type7_html_paragraph_interruptions(text)
     text = canonicalize_classification_placeholders(text)
+    text = canonicalize_generic_required_placeholders(text)
+    text = canonicalize_ambiguous_commit_tokens(text)
     if link_scan_document:
         text = mask_inline_code_record_destinations(text)
         text = canonicalize_record_link_titles(text)
