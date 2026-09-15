@@ -373,9 +373,10 @@ def parse_record_link_cell(cell: str, context: str) -> tuple[str, str]:
 def rendered_inline_text(value: str) -> str:
     """Approximate visible inline text for required field-value validation.
 
-    Contract fields must contain textual substance after non-rendering Markdown
-    constructs are removed. Link/image destinations, formatting markers, and HTML
-    tags therefore cannot make an otherwise empty field count as populated.
+    Contract fields and mandatory section bodies must contain textual substance
+    after non-rendering Markdown constructs are removed. Link/image destinations,
+    formatting markers, and HTML tags therefore cannot make empty source count as
+    populated rendered content.
     """
     text = value
     text = INLINE_IMAGE_RE.sub(lambda m: m.group(1), text)
@@ -410,6 +411,8 @@ def section_has_content(lines: list[str]) -> bool:
         if not line or line in TEMPLATE_PLACEHOLDER_LINES:
             continue
         if EMPTY_LABEL_RE.match(line) or is_structural_only_line(line):
+            continue
+        if not has_substantive_rendered_text(line):
             continue
         return True
     return False
@@ -501,7 +504,7 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
     for heading in sorted(REQUIRED_V2):
         if not section_has_content(section_lines(text, heading)):
             die(
-                f"{path.relative_to(ROOT)} has empty/template/structural-only mandatory section {heading}"
+                f"{path.relative_to(ROOT)} has empty/template/structural/markup-only mandatory section {heading}"
             )
 
     contract = section_lines(text, "## Optimization problem contract")
