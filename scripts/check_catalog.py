@@ -108,21 +108,6 @@ def die(msg: str) -> None:
     raise SystemExit(f"catalog-integrity: {msg}")
 
 
-def section_lines(text: str, heading: str) -> list[str]:
-    """Return lines belonging to one exact level-2 Markdown section."""
-    lines = text.splitlines()
-    try:
-        start = lines.index(heading) + 1
-    except ValueError:
-        return []
-    end = len(lines)
-    for i in range(start, len(lines)):
-        if lines[i].startswith("## "):
-            end = i
-            break
-    return lines[start:end]
-
-
 def strip_html_comments(text: str) -> str:
     return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
 
@@ -146,6 +131,26 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
             continue
         visible.append(raw)
     return visible
+
+
+def visible_text(text: str) -> str:
+    """Return visible, non-fenced Markdown text for semantic integrity checks."""
+    return "\n".join(visible_nonfenced_lines(text.splitlines()))
+
+
+def section_lines(text: str, heading: str) -> list[str]:
+    """Return one exact visible level-2 Markdown section."""
+    lines = visible_nonfenced_lines(text.splitlines())
+    try:
+        start = lines.index(heading) + 1
+    except ValueError:
+        return []
+    end = len(lines)
+    for i in range(start, len(lines)):
+        if lines[i].startswith("## "):
+            end = i
+            break
+    return lines[start:end]
 
 
 def markdown_table_cells(line: str) -> list[str] | None:
@@ -262,11 +267,11 @@ records: dict[str, Path] = {}
 status_categories: dict[str, str] = {}
 for path in sorted(OPT_DIR.glob("OPT-*.md")):
     text = path.read_text(encoding="utf-8")
-    lines = text.splitlines()
+    lines = visible_nonfenced_lines(text.splitlines())
     first = lines[0] if lines else ""
     match = ID_RE.match(first)
     if not match:
-        die(f"bad record heading: {path.relative_to(ROOT)}")
+        die(f"bad or hidden record heading: {path.relative_to(ROOT)}")
     record_id = match.group(1)
 
     filename_match = FILENAME_ID_RE.match(path.name)
@@ -286,7 +291,7 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
     status_matches = [STATUS_RE.match(line) for line in lines]
     statuses = [m.group(1).strip() for m in status_matches if m is not None]
     if len(statuses) != 1:
-        die(f"{path.relative_to(ROOT)} must contain exactly one Status line")
+        die(f"{path.relative_to(ROOT)} must contain exactly one visible Status line")
     if not statuses[0]:
         die(f"{path.relative_to(ROOT)} has empty Status")
 
@@ -302,7 +307,7 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
         headings = {line for line in lines if line.startswith("## ")}
         missing = sorted(REQUIRED_V2 - headings)
         if missing:
-            die(f"{path.relative_to(ROOT)} missing sections: {', '.join(missing)}")
+            die(f"{path.relative_to(ROOT)} missing visible sections: {', '.join(missing)}")
 
         for heading in sorted(REQUIRED_V2):
             if not section_has_content(section_lines(text, heading)):
@@ -331,16 +336,17 @@ if missing_frozen:
 
 record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in records.items()}
 
-# Validate every optimization-record link wherever it appears. README index
+# Validate every visible optimization-record link wherever it appears. README index
 # completeness/uniqueness is checked separately from its rendered catalog table,
 # so contextual prose links are allowed and do not count as duplicate index rows.
 for doc_name in ("README.md", "CATALOG.md"):
     text = (ROOT / doc_name).read_text(encoding="utf-8")
-    links = LINK_RE.findall(text)
+    rendered = visible_text(text)
+    links = LINK_RE.findall(rendered)
     for label, rel in links:
         target = ROOT / rel
         if not target.is_file():
-            die(f"broken record link in {doc_name}: {rel}")
+            die(f"broken visible record link in {doc_name}: {rel}")
         target_id = record_paths.get(rel)
         if target_id is None:
             die(f"record link in {doc_name} is not a discovered OPT record: {rel}")
@@ -353,7 +359,7 @@ for doc_name in ("README.md", "CATALOG.md"):
     if doc_name == "README.md":
         catalog_lines = section_lines(text, "## Catalog")
         if not catalog_lines:
-            die("README.md is missing a non-empty ## Catalog section")
+            die("README.md is missing a non-empty visible ## Catalog section")
         catalog_table = extract_markdown_table(
             catalog_lines,
             ("ID", "Optimization", "Status", "Core idea"),
@@ -394,19 +400,20 @@ for doc_name in ("README.md", "CATALOG.md"):
                 )
 
 catalog = (ROOT / "CATALOG.md").read_text(encoding="utf-8")
-catalog_ids = set(OPT_TOKEN_RE.findall(catalog))
+rendered_catalog = visible_text(catalog)
+catalog_ids = set(OPT_TOKEN_RE.findall(rendered_catalog))
 unknown_catalog_ids = sorted(catalog_ids - records.keys())
 if unknown_catalog_ids:
-    die(f"CATALOG.md references unknown record ID(s): {', '.join(unknown_catalog_ids)}")
+    die(f"CATALOG.md references unknown visible record ID(s): {', '.join(unknown_catalog_ids)}")
 for record_id, path in records.items():
     if record_id not in catalog_ids:
-        die(f"{record_id} ({path.name}) is not mentioned in CATALOG.md")
+        die(f"{record_id} ({path.name}) is not visibly mentioned in CATALOG.md")
 
 # The quick decision table is a distinct advertised decision surface. Mentions
 # in later descriptive sections must not be allowed to mask a missing table row.
 decision_lines = section_lines(catalog, "## Quick decision table")
 if not decision_lines:
-    die("CATALOG.md is missing a non-empty ## Quick decision table section")
+    die("CATALOG.md is missing a non-empty visible ## Quick decision table section")
 decision_table = extract_markdown_table(
     decision_lines,
     ("Bottleneck / problem shape", "First record to inspect", "Core idea"),
@@ -443,17 +450,17 @@ problem_contract = ROOT / "OPTIMIZATION-PROBLEM.md"
 if not problem_contract.is_file():
     die("OPTIMIZATION-PROBLEM.md is missing")
 problem_text = problem_contract.read_text(encoding="utf-8")
-problem_lines = problem_text.splitlines()
+problem_lines = visible_nonfenced_lines(problem_text.splitlines())
 if not problem_lines or problem_lines[0] != "# Optimization Problem Contract":
-    die("OPTIMIZATION-PROBLEM.md has missing/invalid title")
+    die("OPTIMIZATION-PROBLEM.md has missing/hidden/invalid title")
 if "## Canonical contract" not in problem_lines:
-    die("OPTIMIZATION-PROBLEM.md is missing ## Canonical contract")
+    die("OPTIMIZATION-PROBLEM.md is missing visible ## Canonical contract")
 canonical = section_lines(problem_text, "## Canonical contract")
 canonical_text = "\n".join(canonical)
 if "P = (X, F, f, d, C, B, S)" not in canonical_text:
-    die("OPTIMIZATION-PROBLEM.md is missing canonical P = (X, F, f, d, C, B, S) formula")
+    die("OPTIMIZATION-PROBLEM.md is missing visible canonical P = (X, F, f, d, C, B, S) formula")
 for field, pattern in CANONICAL_DEFINITION_PATTERNS.items():
     if not any(pattern.match(line) for line in canonical):
-        die(f"OPTIMIZATION-PROBLEM.md is missing canonical definition for {field}")
+        die(f"OPTIMIZATION-PROBLEM.md is missing visible canonical definition for {field}")
 
 print(f"CATALOG_INTEGRITY_OK records={len(records)} frozen_v1={len(FROZEN_V1)}")
