@@ -102,6 +102,7 @@ RAW_HTML_COMPLETE_TAG_RE = re.compile(
     r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*)?/?>[ \t]*$"
 )
 EMPHASIS_WRAPPERS = ("**", "__", "~~", "*", "_")
+STATUS_WRAPPERS = ("**", "__", "~~", "*", "_", "`")
 CANONICAL_DEFINITION_PATTERNS = {
     "X": re.compile(r"^- `X` — \S"),
     "F": re.compile(r"^- `F(?: ⊆ X)?` — \S"),
@@ -117,10 +118,13 @@ def die(msg: str) -> None:
     raise SystemExit(f"catalog-integrity: {msg}")
 
 
-def strip_html_comments_from_visible_line(
-    raw: str, in_comment: bool
-) -> tuple[str, bool]:
-    """Remove HTML comments from a non-fenced line, carrying unmatched state."""
+def is_indented_code_line(raw: str) -> bool:
+    """Return whether a non-fenced line is an indented Markdown code line."""
+    return raw.startswith("\t") or raw.startswith("    ")
+
+
+def strip_inline_html_comments(raw: str, in_comment: bool) -> tuple[str, bool]:
+    """Strip inline HTML comments while carrying a mid-line unmatched comment."""
     out: list[str] = []
     cursor = 0
 
@@ -147,12 +151,13 @@ def strip_html_comments_from_visible_line(
 
 
 def raw_html_block_start(raw: str) -> tuple[str, str | None] | None:
-    """Return a raw-HTML block mode for CommonMark-style block starts.
+    """Return the raw-HTML block mode for a CommonMark-style block start."""
+    # A comment beginning at the start of a block line is raw HTML type 2. The
+    # complete terminating line belongs to the raw block, even when text follows
+    # the --> token, so callers must discard that whole line.
+    if re.match(r"^ {0,3}<!--", raw):
+        return "token", "-->"
 
-    Markdown inside a raw HTML block is not parsed as Markdown, so it must not
-    satisfy schema headings or fields. Modes are: tag (until matching close),
-    token (until literal terminator), and blank (until the first blank line).
-    """
     type1 = RAW_HTML_TYPE1_OPEN_RE.match(raw)
     if type1 is not None:
         return "tag", type1.group("tag").lower()
@@ -172,18 +177,17 @@ def raw_html_tag_closes(raw: str, tag: str) -> bool:
 
 
 def visible_nonfenced_lines(lines: list[str]) -> list[str]:
-    """Return rendered-ish Markdown lines, excluding non-Markdown constructs.
+    """Return Markdown-visible lines used by schema validation.
 
-    Fence state is determined from the original Markdown line before HTML comments
-    are removed, so a fence-looking line with trailing comment text cannot become
-    a valid closer after preprocessing. Raw HTML blocks are also excluded because
-    Markdown-looking source inside them is not rendered as Markdown headings,
-    fields, links, or tables.
+    The pass excludes fenced code, indented code, raw HTML blocks, and HTML
+    comments before headings, fields, links, and tables are interpreted.
+    Fence state is derived from the original source line so preprocessing cannot
+    turn a non-closer into a closer.
     """
     visible: list[str] = []
     fence_char: str | None = None
     fence_len = 0
-    in_comment = False
+    inline_comment = False
     html_mode: str | None = None
     html_end: str | None = None
 
@@ -207,6 +211,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                 if html_end is not None and html_end in raw:
                     html_mode = None
                     html_end = None
+                # The whole terminator line belongs to the raw HTML block.
                 continue
             if html_mode == "blank":
                 if raw.strip() == "":
@@ -215,14 +220,16 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     visible.append("")
                 continue
 
-        if in_comment:
-            rendered, in_comment = strip_html_comments_from_visible_line(raw, True)
-            if in_comment:
+        if inline_comment:
+            rendered, inline_comment = strip_inline_html_comments(raw, True)
+            if inline_comment:
                 continue
             raw_for_parse = rendered
         else:
-            # A fence opener is recognized from the original line. This matters
-            # because HTML comment syntax in a fence info string is literal text.
+            # Four-space/tab-indented lines are code blocks, not headings/tables.
+            if is_indented_code_line(raw):
+                continue
+
             opener = FENCE_OPEN_RE.match(raw)
             if opener is not None:
                 run = opener.group(1)
@@ -241,13 +248,18 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                 elif html_mode == "token" and html_end is not None and html_end in raw:
                     html_mode = None
                     html_end = None
+                # Raw HTML owns the complete source line, including a terminator.
                 continue
 
-            raw_for_parse, in_comment = strip_html_comments_from_visible_line(raw, False)
+            raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
 
+        # An inline comment can expose a remainder, but that remainder still must
+        # not be accepted if it is indented as code after comment removal.
+        if raw_for_parse and is_indented_code_line(raw_for_parse):
+            continue
         if raw_for_parse:
             visible.append(raw_for_parse)
-        elif not in_comment and raw == "":
+        elif not inline_comment and raw == "":
             visible.append("")
 
     return visible
@@ -273,6 +285,10 @@ def section_lines(text: str, heading: str) -> list[str]:
 
 
 def markdown_table_cells(line: str) -> list[str] | None:
+    # Preserve the four-space/tab code-block distinction even if a caller passes
+    # a line that did not come through visible_nonfenced_lines.
+    if is_indented_code_line(line):
+        return None
     stripped = line.strip()
     if not stripped.startswith("|"):
         return None
@@ -315,22 +331,27 @@ def extract_markdown_table(
     die(f"{context} is missing the expected Markdown table")
 
 
-def unwrap_markdown_emphasis(cell: str) -> str:
-    """Remove balanced outer emphasis wrappers; do not unwrap code spans."""
-    value = cell.strip()
+def unwrap_outer_formatting(value: str, wrappers: tuple[str, ...]) -> str:
+    """Remove only balanced formatting that wraps the complete value."""
+    result = value.strip()
     changed = True
     while changed:
         changed = False
-        for marker in EMPHASIS_WRAPPERS:
+        for marker in wrappers:
             if (
-                len(value) > 2 * len(marker)
-                and value.startswith(marker)
-                and value.endswith(marker)
+                len(result) > 2 * len(marker)
+                and result.startswith(marker)
+                and result.endswith(marker)
             ):
-                value = value[len(marker) : -len(marker)].strip()
+                result = result[len(marker) : -len(marker)].strip()
                 changed = True
                 break
-    return value
+    return result
+
+
+def unwrap_markdown_emphasis(cell: str) -> str:
+    """Remove balanced outer emphasis wrappers; do not unwrap code spans."""
+    return unwrap_outer_formatting(cell, EMPHASIS_WRAPPERS)
 
 
 def parse_record_link_cell(cell: str, context: str) -> tuple[str, str]:
@@ -362,8 +383,10 @@ def section_has_content(lines: list[str]) -> bool:
 
 
 def normalized_status_category(raw: str) -> str:
-    plain = re.sub(r"[*_`]", "", raw).strip()
-    return plain.split(";", 1)[0].strip()
+    # Notes after ';' are outside the category. Preserve literal marker characters
+    # inside the category and unwrap only balanced formatting around the whole one.
+    category = raw.split(";", 1)[0].strip()
+    return unwrap_outer_formatting(category, STATUS_WRAPPERS)
 
 
 def require_prefixed_fields(
@@ -471,7 +494,7 @@ for doc_name in ("README.md", "CATALOG.md"):
         target_id = record_paths.get(rel)
         if target_id is None:
             die(f"record link in {doc_name} is not a discovered OPT record: {rel}")
-        if re.sub(r"[*_~]", "", label).strip() != target_id:
+        if unwrap_markdown_emphasis(label) != target_id:
             die(
                 f"record link label mismatch in {doc_name}: '{label}' points to "
                 f"{target_id} ({rel})"
