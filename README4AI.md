@@ -43,6 +43,10 @@ Before choosing an optimizer, classify:
 - latency-critical path competes with optional work → `OPT-CRIT-001`
 - gradual performance drift/regression → `OPT-BUDGET-001`
 - combinatorial search with valid optimistic bounds → `OPT-PRUNE-001`
+- hot deterministic batch underuses vector ISA → `OPT-SIMD-001`
+- large AoS traversal needs cache-local bounded hot-field chunks → `OPT-SOA-001`
+- repeated parallel runs pay thread/buffer startup or need explicit physical/logical worker policy → `OPT-POOL-001`
+- several exact execution paths trade places across hosts/workloads → `OPT-AUTO-001`
 
 ## Important distinctions
 
@@ -50,6 +54,10 @@ Before choosing an optimizer, classify:
 - **coalescing**: result does not exist yet, but equivalent callers share one in-flight evaluation;
 - **async search diversification**: independent workers should intentionally avoid evaluating the same pending region;
 - **parallelism**: improves throughput only when resource contention and information dependencies allow it;
+- **SIMD/autovectorization**: changes instruction-level execution of equivalent batch work; code-generation evidence is not itself an end-to-end speedup;
+- **SoA tiling**: changes temporary data layout/working-set shape while preserving the logical source/output contract;
+- **persistent pools**: change worker lifetime and lifecycle amortization, not the kernel's semantics;
+- **host-auto promotion**: selects among already-correct paths using live calibration and a fail-closed oracle; it does not make one path universally best;
 - **approximation**: a contract choice, never a hidden optimization.
 
 ## Status vocabulary
@@ -72,17 +80,21 @@ The frozen v1 records retain their historical release wording and are exempt fro
 - Never weaken an assertion, tolerance, theorem target, receipt, trust boundary or validation rule without an explicit contract change.
 - Never treat a cache hit as proof of a cold rebuild.
 - Never equate requested workers with observed effective execution.
-- Never copy historical worker counts, thresholds, search budgets, bit partitions, cache sizes or approximation limits without target measurement.
+- Never copy historical worker counts, thresholds, search budgets, bit partitions, cache sizes, tile sizes, calibration repeats, promotion margins or approximation limits without target measurement.
 - Never prune a search region unless the bound used for pruning is sound for the declared problem.
 - Never call an approximate result exact.
+- Never infer end-to-end speedup from vector instructions or an isolated kernel probe alone.
+- Never publish a native/ISA-specialized path as universal if deployment compatibility is not guaranteed.
+- Never treat process-wide RSS gathered across calibration as isolated selected-engine memory evidence.
+- Never let an auto selector hide a parity failure by silently falling back; fail closed and preserve explicit canonical/manual control.
 - Never optimize from stale workload assumptions when fresh measurements are available.
 - `suxen.zip` remains unpromoted until inventoried and inspected.
 
 ## What to copy vs what to adapt
 
-Copy the **structure**: equivalence gates, complete signature identity, coalescing ownership, partitioned coordination, density-adaptive representation, shared materialization, adaptive trial ledgers, explicit approximation envelopes, early reduction, critical-path classification, performance budgets and sound bounds.
+Copy the **structure**: equivalence gates, complete signature identity, coalescing ownership, partitioned coordination, density-adaptive representation, shared materialization, adaptive trial ledgers, explicit approximation envelopes, early reduction, critical-path classification, performance budgets, sound bounds, SIMD parity/codegen gates, bounded SoA working sets, persistent-worker lifecycle accounting, and calibrated promotion with independent oracle verification.
 
-Adapt the **numbers and policies**: trial counts, worker caps, hashes, cache sizes, shard counts, bit splits, batch widths, domain-contraction rates, acquisition parameters, tolerances, error limits, benchmark thresholds and stopping budgets.
+Adapt the **numbers and policies**: trial counts, worker caps, hashes, cache sizes, shard counts, bit splits, batch widths, tile sizes, domain-contraction rates, acquisition parameters, tolerances, error limits, benchmark thresholds, calibration sizes/repeats, promotion margins, topology policy and stopping budgets.
 
 ## Evidence expected in a new record
 
