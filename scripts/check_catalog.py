@@ -2,17 +2,21 @@
 """Normalize supported CommonMark syntax, then run the hardened catalog checker.
 
 The core checker intentionally stays strict and source-oriented. This front end creates a
-scratch copy, canonicalizes two rendering-equivalent forms that the core otherwise rejects
+scratch copy, canonicalizes rendering-equivalent forms that the core otherwise rejects
 or overlooks, and runs the core against that copy:
 
-* one-to-three spaces before ATX headings (valid CommonMark indentation), and
-* optional Markdown titles on links to optimization-record Markdown files.
+* one-to-three spaces before ATX headings (valid CommonMark indentation),
+* optional Markdown titles on links to optimization-record Markdown files,
+* inline-code examples that resemble optimization-record links,
+* block-quoted link-reference definitions that render no substantive content, and
+* classification placeholders hidden behind rendering-only inline formatting.
 
 The repository working tree is never modified by this normalization step.
 """
 
 from __future__ import annotations
 
+import html
 import re
 import shutil
 import subprocess
@@ -25,6 +29,35 @@ CORE_NAME = "check_catalog_core.py"
 ATX_INDENT_RE = re.compile(r"(?m)^ {1,3}(?=#{1,6}(?:[ \t]|$))")
 RECORD_LINK_START_RE = re.compile(
     r"\[([^\]\r\n]+)\]\((optimizations/[^\s)#]+\.md)"
+)
+BLOCKQUOTE_PREFIX_RE = re.compile(r"^ {0,3}>[ \t]?")
+LINK_REFERENCE_DEFINITION_RE = re.compile(
+    r"^\[(?:\\.|[^\[\]\\])+\]:[ \t]+\S.*$"
+)
+LINK_REFERENCE_TITLE_CONTINUATION_RE = re.compile(
+    r'^ {0,3}(?:"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\((?:\\.|[^)\\])*\))[ \t]*$'
+)
+INLINE_HTML_TAG_RE = re.compile(
+    r"</?[A-Za-z][A-Za-z0-9-]*"
+    r"(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*"
+    r"(?:[ \t]*=[ \t]*(?:\"[^\"]*\"|'[^']*'|[^ \t\n\"'=<>`]+))?)*"
+    r"[ \t]*/?>"
+)
+INLINE_WRAPPERS = ("**", "__", "~~", "*", "_", "`")
+CLASSIFICATION_TEMPLATE_VALUES = {
+    "Variables": "continuous / integer / categorical / conditional / mixed",
+    "Search scope": "local / global",
+    "Objective behavior": "deterministic / noisy / stochastic",
+    "Information": "gradient available / derivative-free / black-box",
+    "Evaluation cost": "cheap / moderate / expensive",
+    "Constraints": "bounds / equality / inequality / semantic / resource",
+    "Parallelism": "sequential / synchronous batch / asynchronous",
+    "Exactness": "exact / approximation permitted under an explicit error contract",
+}
+CLASSIFICATION_FIELD_RE = re.compile(
+    r"^(?P<prefix>- (?P<field>"
+    + "|".join(re.escape(field) for field in CLASSIFICATION_TEMPLATE_VALUES)
+    + r"):[ \t]*)(?P<value>.*)$"
 )
 
 
@@ -48,8 +81,148 @@ def _parse_title(text: str, index: int) -> int | None:
             continue
         if char == closer:
             return index + 1
+        if char in "\r\n":
+            return None
         index += 1
     return None
+
+
+def _find_label_close(text: str, open_index: int) -> int | None:
+    depth = 1
+    index = open_index + 1
+    while index < len(text):
+        if text[index] == "\\" and index + 1 < len(text):
+            index += 2
+            continue
+        if text[index] == "[":
+            depth += 1
+        elif text[index] == "]":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _find_inline_link_end(text: str, open_paren: int) -> int | None:
+    """Return the index after a complete inline-link destination/title."""
+    index = _skip_whitespace(text, open_paren + 1)
+    if index >= len(text):
+        return None
+    if text[index] == ")":
+        return index + 1
+
+    if text[index] == "<":
+        index += 1
+        while index < len(text):
+            if text[index] == "\\" and index + 1 < len(text):
+                index += 2
+                continue
+            if text[index] == ">":
+                after_title = _skip_whitespace(text, index + 1)
+                if after_title < len(text) and text[after_title] == ")":
+                    return after_title + 1
+                title_end = _parse_title(text, after_title)
+                if title_end is None:
+                    return None
+                outer_close = _skip_whitespace(text, title_end)
+                if outer_close < len(text) and text[outer_close] == ")":
+                    return outer_close + 1
+                return None
+            if text[index] in "\r\n<":
+                return None
+            index += 1
+        return None
+
+    depth = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            index += 2
+            continue
+        if char == "(":
+            depth += 1
+            index += 1
+            continue
+        if char == ")":
+            if depth == 0:
+                return index + 1
+            depth -= 1
+            index += 1
+            continue
+        if char in " \t\r\n" and depth == 0:
+            after_title = _skip_whitespace(text, index)
+            if after_title < len(text) and text[after_title] == ")":
+                return after_title + 1
+            title_end = _parse_title(text, after_title)
+            if title_end is None:
+                return None
+            outer_close = _skip_whitespace(text, title_end)
+            if outer_close < len(text) and text[outer_close] == ")":
+                return outer_close + 1
+            return None
+        if char in "<>" or ord(char) < 0x20:
+            return None
+        index += 1
+    return None
+
+
+def _is_backslash_escaped(text: str, index: int) -> bool:
+    count = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        count += 1
+        cursor -= 1
+    return count % 2 == 1
+
+
+def _backtick_run_length(text: str, index: int) -> int:
+    cursor = index
+    while cursor < len(text) and text[cursor] == "`":
+        cursor += 1
+    return cursor - index
+
+
+def mask_inline_code_record_destinations(text: str) -> str:
+    """Prevent link-shaped inline-code examples from being treated as actual links."""
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "`" or _is_backslash_escaped(text, index):
+            out.append(text[index])
+            index += 1
+            continue
+
+        run_len = _backtick_run_length(text, index)
+        cursor = index + run_len
+        close_start: int | None = None
+        while cursor < len(text):
+            if text[cursor] != "`":
+                cursor += 1
+                continue
+            candidate_len = _backtick_run_length(text, cursor)
+            if candidate_len == run_len:
+                close_start = cursor
+                break
+            cursor += candidate_len
+
+        if close_start is None:
+            out.append(text[index : index + run_len])
+            index += run_len
+            continue
+
+        code_text = text[index + run_len : close_start]
+        code_text = code_text.replace(
+            "(optimizations/", "(__inline_code__/optimizations/"
+        )
+        out.append(
+            text[index : index + run_len]
+            + code_text
+            + text[close_start : close_start + run_len]
+        )
+        index = close_start + run_len
+
+    return "".join(out)
 
 
 def canonicalize_record_link_titles(text: str) -> str:
@@ -82,7 +255,7 @@ def canonicalize_record_link_titles(text: str) -> str:
             search_from = after_destination
             continue
 
-        out.append(text[cursor:match.start()])
+        out.append(text[cursor : match.start()])
         out.append(f"[{match.group(1)}]({match.group(2)})")
         cursor = outer_close + 1
         search_from = cursor
@@ -90,9 +263,98 @@ def canonicalize_record_link_titles(text: str) -> str:
     return "".join(out)
 
 
-def canonicalize_markdown(text: str) -> str:
+def _strip_blockquote_prefix(line: str) -> tuple[str, bool]:
+    result = line
+    changed = False
+    while True:
+        match = BLOCKQUOTE_PREFIX_RE.match(result)
+        if match is None:
+            return result, changed
+        result = result[match.end() :]
+        changed = True
+
+
+def canonicalize_nested_reference_definitions(text: str) -> str:
+    """Expose non-rendering quoted reference definitions to the strict core checker."""
+    out: list[str] = []
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+        unquoted, changed = _strip_blockquote_prefix(content)
+        stripped = unquoted.strip()
+        if changed and (
+            LINK_REFERENCE_DEFINITION_RE.fullmatch(stripped)
+            or LINK_REFERENCE_TITLE_CONTINUATION_RE.fullmatch(unquoted)
+        ):
+            out.append(unquoted + ending)
+        else:
+            out.append(raw)
+    return "".join(out)
+
+
+def _render_placeholder_candidate(value: str) -> str:
+    """Render the subset of inline Markdown relevant to template placeholders."""
+    result = html.unescape(value.strip())
+    changed = True
+    while changed:
+        changed = False
+        for marker in INLINE_WRAPPERS:
+            if (
+                len(result) > 2 * len(marker)
+                and result.startswith(marker)
+                and result.endswith(marker)
+            ):
+                result = result[len(marker) : -len(marker)].strip()
+                changed = True
+                break
+        if changed:
+            continue
+
+        if result.startswith("["):
+            label_close = _find_label_close(result, 0)
+            if (
+                label_close is not None
+                and label_close + 1 < len(result)
+                and result[label_close + 1] == "("
+            ):
+                link_end = _find_inline_link_end(result, label_close + 1)
+                if link_end == len(result):
+                    result = result[1:label_close].strip()
+                    changed = True
+
+    result = INLINE_HTML_TAG_RE.sub("", result)
+    result = re.sub(r"\\(.)", r"\1", result)
+    return html.unescape(result).strip()
+
+
+def canonicalize_classification_placeholders(text: str) -> str:
+    """Normalize rendered-but-unselected template values back to canonical source."""
+    out: list[str] = []
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+        match = CLASSIFICATION_FIELD_RE.fullmatch(content)
+        if match is None:
+            out.append(raw)
+            continue
+
+        field = match.group("field")
+        value = match.group("value")
+        if _render_placeholder_candidate(value) == CLASSIFICATION_TEMPLATE_VALUES[field]:
+            out.append(match.group("prefix") + CLASSIFICATION_TEMPLATE_VALUES[field] + ending)
+        else:
+            out.append(raw)
+    return "".join(out)
+
+
+def canonicalize_markdown(text: str, *, link_scan_document: bool) -> str:
     text = ATX_INDENT_RE.sub("", text)
-    return canonicalize_record_link_titles(text)
+    text = canonicalize_nested_reference_definitions(text)
+    text = canonicalize_classification_placeholders(text)
+    if link_scan_document:
+        text = mask_inline_code_record_destinations(text)
+        text = canonicalize_record_link_titles(text)
+    return text
 
 
 def markdown_inputs(root: Path) -> list[Path]:
@@ -117,7 +379,10 @@ def main() -> int:
 
         for path in markdown_inputs(scratch):
             original = path.read_text(encoding="utf-8")
-            normalized = canonicalize_markdown(original)
+            normalized = canonicalize_markdown(
+                original,
+                link_scan_document=path.name in {"README.md", "CATALOG.md"},
+            )
             if normalized != original:
                 path.write_text(normalized, encoding="utf-8")
 
