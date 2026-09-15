@@ -18,8 +18,12 @@ Machine-facing rules for agents using this repository.
 14. For critical-path/speculative work, ensure speculation cannot expose side effects before commitment and does not starve the actual critical path.
 15. For performance budgets, characterize benchmark noise/environment before enforcing a threshold.
 16. For real-time/DSP work, separate slow control work from hot sample/block work when semantics allow it; avoid allocations and synchronization on the hot path.
-17. `power_module.md` contains both implemented ideas and aspirational performance language. Check corresponding code/evidence before promoting a claim.
-18. `suxen.zip` is a source candidate, not validated evidence. Inventory and read relevant source before extracting optimization claims.
-19. The three pinned v1 Lean model files are immutable historical formalization. New records do not become formally proved by association; version future formal modules separately.
-20. New post-v1 records must state status, source identity, optimization problem contract, preserved contract, validation, limitations and rollback conditions.
-21. Run `python3 scripts/check_catalog.py` after catalog changes.
+17. For SIMD/native specialization, require reference parity plus actual code-generation evidence and repeated target-host measurement. Never infer end-to-end speedup merely from wider instructions or an isolated probe.
+18. For SoA/tiling, bound temporary storage per worker, prove packed-field and reduction equivalence, and re-profile tile sizes on the target cache/memory hierarchy rather than copying donor values.
+19. For persistent worker pools, test repeated-dispatch state isolation and account for startup/teardown amortization. Physical/logical worker selection is not evidence of CPU affinity or NUMA placement.
+20. For automatic execution-path promotion, calibrate only already-correct candidates on workload-shaped samples, include lifecycle/tuning costs, require a material promotion margin, preserve canonical/manual control, and fail closed against an independent oracle on parity mismatch.
+21. `power_module.md` contains both implemented ideas and aspirational performance language. Check corresponding code/evidence before promoting a claim.
+22. `suxen.zip` is a source candidate, not validated evidence. Inventory and read relevant source before extracting optimization claims.
+23. The three pinned v1 Lean model files are immutable historical formalization. New records do not become formally proved by association; version future formal modules separately.
+24. New post-v1 records must state status, source identity, optimization problem contract, preserved contract, validation, limitations and rollback conditions.
+25. Run `python3 scripts/check_catalog.py` after catalog changes.
