@@ -26,13 +26,13 @@ A candidate is admissible only if it lies in `F` **and** satisfies `C`. A faster
 
 ## Required classification
 
-Record the following before tuning:
+Record the following before tuning. The dimension names below are the canonical field names used by `templates/OPTIMIZATION-RECORD.md` and `scripts/check_catalog.py`:
 
 | Dimension | Typical values |
 | --- | --- |
 | Variables | continuous / integer / categorical / conditional / mixed |
 | Search scope | local / global |
-| Objective | deterministic / noisy / stochastic |
+| Objective behavior | deterministic / noisy / stochastic |
 | Information | gradient available / derivative-free / black-box |
 | Evaluation cost | cheap / moderate / expensive |
 | Constraints | bounds / equality / inequality / semantic / resource |
