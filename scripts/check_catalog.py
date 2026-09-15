@@ -91,9 +91,16 @@ INLINE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
 INLINE_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 REFERENCE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[[^\]]*\]")
 REFERENCE_LINK_RE = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
-INLINE_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
+INLINE_HTML_TAG_RE = re.compile(
+    r"</?[A-Za-z][A-Za-z0-9-]*"
+    r"(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*"
+    r"(?:[ \t]*=[ \t]*(?:\"[^\"]*\"|'[^']*'|[^ \t\n\"'=<>`]+))?)*"
+    r"[ \t]*/?>"
+)
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
 SECTION_BOUNDARY_RE = re.compile(r"^#{1,2}(?:\s|$)")
+SETEXT_H1_RE = re.compile(r"^ {0,3}=+[ \t]*$")
+SETEXT_H2_RE = re.compile(r"^ {0,3}-+[ \t]*$")
 THEMATIC_BREAK_RE = re.compile(
     r"^(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
 )
@@ -134,6 +141,11 @@ def die(msg: str) -> None:
     raise SystemExit(f"catalog-integrity: {msg}")
 
 
+def markdown_source_lines(text: str) -> list[str]:
+    """Split only on CommonMark line endings (LF, CRLF, or CR)."""
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
 def is_indented_code_line(raw: str) -> bool:
     """Return whether a non-fenced line is an indented Markdown code line."""
     return raw.startswith("\t") or raw.startswith("    ")
@@ -168,9 +180,6 @@ def strip_inline_html_comments(raw: str, in_comment: bool) -> tuple[str, bool]:
 
 def raw_html_block_start(raw: str) -> tuple[str, str | None] | None:
     """Return the raw-HTML block mode for a CommonMark-style block start."""
-    # A comment beginning at the start of a block line is raw HTML type 2. The
-    # complete terminating line belongs to the raw block, even when text follows
-    # the --> token, so callers must discard that whole line.
     if re.match(r"^ {0,3}<!--", raw):
         return "token", "-->"
 
@@ -193,13 +202,7 @@ def raw_html_tag_closes(raw: str, tag: str) -> bool:
 
 
 def visible_nonfenced_lines(lines: list[str]) -> list[str]:
-    """Return Markdown-visible lines used by schema validation.
-
-    The pass excludes fenced code, indented code, raw HTML blocks, and HTML
-    comments before headings, fields, links, and tables are interpreted.
-    Fence state is derived from the original source line so preprocessing cannot
-    turn a non-closer into a closer.
-    """
+    """Return Markdown-visible lines used by schema validation."""
     visible: list[str] = []
     fence_char: str | None = None
     fence_len = 0
@@ -227,7 +230,6 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                 if html_end is not None and html_end in raw:
                     html_mode = None
                     html_end = None
-                # The whole terminator line belongs to the raw HTML block.
                 continue
             if html_mode == "blank":
                 if raw.strip() == "":
@@ -242,7 +244,6 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                 continue
             raw_for_parse = rendered
         else:
-            # Four-space/tab-indented lines are code blocks, not headings/tables.
             if is_indented_code_line(raw):
                 continue
 
@@ -264,13 +265,10 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                 elif html_mode == "token" and html_end is not None and html_end in raw:
                     html_mode = None
                     html_end = None
-                # Raw HTML owns the complete source line, including a terminator.
                 continue
 
             raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
 
-        # An inline comment can expose a remainder, but that remainder still must
-        # not be accepted if it is indented as code after comment removal.
         if raw_for_parse and is_indented_code_line(raw_for_parse):
             continue
         if raw_for_parse:
@@ -282,27 +280,36 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
 
 
 def visible_text(text: str) -> str:
-    return "\n".join(visible_nonfenced_lines(text.splitlines()))
+    return "\n".join(visible_nonfenced_lines(markdown_source_lines(text)))
+
+
+def is_setext_section_boundary(lines: list[str], index: int) -> bool:
+    """Recognize a visible Setext H1/H2 beginning at lines[index]."""
+    if index + 1 >= len(lines):
+        return False
+    candidate = lines[index]
+    if not candidate.strip() or HEADING_RE.match(candidate):
+        return False
+    underline = lines[index + 1]
+    return bool(SETEXT_H1_RE.fullmatch(underline) or SETEXT_H2_RE.fullmatch(underline))
 
 
 def section_lines(text: str, heading: str) -> list[str]:
     """Return one exact visible level-2 Markdown section."""
-    lines = visible_nonfenced_lines(text.splitlines())
+    lines = visible_nonfenced_lines(markdown_source_lines(text))
     try:
         start = lines.index(heading) + 1
     except ValueError:
         return []
     end = len(lines)
     for i in range(start, len(lines)):
-        if SECTION_BOUNDARY_RE.match(lines[i]):
+        if SECTION_BOUNDARY_RE.match(lines[i]) or is_setext_section_boundary(lines, i):
             end = i
             break
     return lines[start:end]
 
 
 def markdown_table_cells(line: str) -> list[str] | None:
-    # Preserve the four-space/tab code-block distinction even if a caller passes
-    # a line that did not come through visible_nonfenced_lines.
     if is_indented_code_line(line):
         return None
     stripped = line.strip()
@@ -366,7 +373,6 @@ def unwrap_outer_formatting(value: str, wrappers: tuple[str, ...]) -> str:
 
 
 def unwrap_markdown_emphasis(cell: str) -> str:
-    """Remove balanced outer emphasis wrappers; do not unwrap code spans."""
     return unwrap_outer_formatting(cell, EMPHASIS_WRAPPERS)
 
 
@@ -379,13 +385,7 @@ def parse_record_link_cell(cell: str, context: str) -> tuple[str, str]:
 
 
 def rendered_inline_text(value: str) -> str:
-    """Approximate visible inline text for required field-value validation.
-
-    Contract fields and mandatory section bodies must contain textual substance
-    after non-rendering Markdown constructs are removed. Link/image destinations,
-    formatting markers, HTML tags, and character-reference spelling therefore
-    cannot make empty rendered source count as populated content.
-    """
+    """Approximate visible inline text for required field-value validation."""
     text = value
     text = INLINE_IMAGE_RE.sub(lambda m: m.group(1), text)
     text = INLINE_LINK_RE.sub(lambda m: m.group(1), text)
@@ -398,7 +398,6 @@ def rendered_inline_text(value: str) -> str:
 
 
 def has_substantive_rendered_text(value: str) -> bool:
-    """Require at least one visible alphanumeric character after inline parsing."""
     return any(ch.isalnum() for ch in rendered_inline_text(value))
 
 
@@ -427,8 +426,6 @@ def section_has_content(lines: list[str]) -> bool:
 
 
 def normalized_status_category(raw: str) -> str:
-    # Notes after ';' are outside the category. Preserve literal marker characters
-    # inside the category and unwrap only balanced formatting around the whole one.
     category = raw.split(";", 1)[0].strip()
     return unwrap_outer_formatting(category, STATUS_WRAPPERS)
 
@@ -472,7 +469,7 @@ records: dict[str, Path] = {}
 status_categories: dict[str, str] = {}
 for path in sorted(OPT_DIR.glob("OPT-*.md")):
     text = path.read_text(encoding="utf-8")
-    lines = visible_nonfenced_lines(text.splitlines())
+    lines = visible_nonfenced_lines(markdown_source_lines(text))
     first = lines[0] if lines else ""
     match = ID_RE.match(first)
     if not match:
@@ -657,7 +654,7 @@ problem_contract = ROOT / "OPTIMIZATION-PROBLEM.md"
 if not problem_contract.is_file():
     die("OPTIMIZATION-PROBLEM.md is missing")
 problem_text = problem_contract.read_text(encoding="utf-8")
-problem_visible = visible_nonfenced_lines(problem_text.splitlines())
+problem_visible = visible_nonfenced_lines(markdown_source_lines(problem_text))
 if not problem_visible or problem_visible[0] != "# Optimization Problem Contract":
     die("OPTIMIZATION-PROBLEM.md has missing/hidden/invalid title")
 if "## Canonical contract" not in problem_visible:
