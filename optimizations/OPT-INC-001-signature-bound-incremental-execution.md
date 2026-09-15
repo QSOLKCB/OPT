@@ -1,0 +1,48 @@
+# OPT-INC-001 — Signature-bound incremental execution
+
+**Status:** Implemented historical reference; target validation required  
+**Domains:** builds, CI, generated artifacts, preprocessing, scientific pipelines
+
+## Source evidence
+
+- `psycledelics/wonderbuild` commit `021d5ed7c298c6c34b091cf5e6d9802e200028a6`
+- `sources/WONDERBUILD.md`
+
+## Problem
+
+Expensive work is rerun even though every input capable of affecting its result is unchanged.
+
+## Optimization problem contract
+
+- Variables: signature definition, persistence scope, invalidation granularity
+- Objective: minimize repeated work and metadata I/O
+- Hard constraint: a reused result must correspond to the complete effective input identity
+- Budget/stopping: target-specific
+
+## Preserved contract
+
+Reused output must be semantically equivalent to a fresh execution for the same effective inputs. Failed executions must not bless a new signature.
+
+## Optimization
+
+Compute a deterministic signature over the effective inputs, compare it with successfully persisted prior state, and execute only when the signature differs or required outputs are missing. Persist the new signature only after success. Reuse filesystem/configuration metadata lazily when its own validity predicate still holds.
+
+## Evidence boundary
+
+Wonderbuild demonstrates the mechanism and benchmark shapes, but its historical timings and timestamp/hash choices are not transferable targets.
+
+## Validation
+
+Test unchanged, changed-input, missing-output, failed-run, and corrupted/stale-state cases against a forced-fresh reference path.
+
+## Target-repo adaptation
+
+Re-profile signature cost, hash choice, metadata granularity and persistence format. Include environment/toolchain inputs when they affect output.
+
+## Failure modes
+
+Incomplete signatures create stale reuse; overly broad signatures erase the benefit; persistence corruption can create false hits; timestamp-only schemes may be unsuitable where timestamp semantics are weak.
+
+## Rollback trigger
+
+Disable reuse if any cache/signature hit diverges from the fresh reference or if signature maintenance costs more than the avoided work.

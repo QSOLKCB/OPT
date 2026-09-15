@@ -1,21 +1,41 @@
 # OPT-XXX-000 — Optimization Name
 
-**Status:** Proposed / Implemented reference / Verified / Verified, environment-specific  
+**Status:** Proposed / Implemented reference / Implemented external reference / Verified / Verified, environment-specific  
 **Domains:** ...
 
 ## Source evidence
 
-- Repository:
-- Release/commit/PR:
-- Exact files:
+- Repository / publication / article:
+- Release/commit/PR/DOI/date:
+- Exact files/sections where applicable:
+- Licensing/provenance boundary where code reuse may matter:
 
 ## Problem
 
-What dominates runtime, latency, memory, I/O or CI cost?
+What dominates runtime, latency, memory, I/O, CI cost, quality budget or optimization-evaluation cost?
+
+## Optimization problem contract
+
+Define the target using `OPTIMIZATION-PROBLEM.md`:
+
+- Search space `X`:
+- Feasible set `F`:
+- Objective `f`:
+- Direction: minimize / maximize / explicit multi-objective ordering
+- Correctness / semantic contract `C`:
+- Evaluation/resource budget `B`:
+- Stopping rule `S`:
+- Variables: continuous / integer / categorical / conditional / mixed
+- Objective: deterministic / noisy / stochastic
+- Search scope: local / global
+- Information: gradient / derivative-free / black-box
+- Exactness: exact / approximation permitted under explicit error contract
 
 ## Preserved contract
 
-State exactly what must remain unchanged: output bytes, theorem targets, assertions, API, numerical tolerance, ordering, statistical guarantee, evidence boundary, etc.
+State exactly what must remain unchanged: output bytes, theorem targets, assertions, API, numerical tolerance, ordering, statistical guarantee, evidence boundary, trust model, etc.
+
+If the optimization changes the contract (for example exact → approximate), state the new contract explicitly instead of claiming preservation.
 
 ## Optimization
 
@@ -24,25 +44,33 @@ Describe the reusable mechanism, not only the source-project patch.
 ## Before / after evidence
 
 - Environment:
-- Baseline:
+- Workload/fixture:
+- Cold baseline:
+- Warm/no-op baseline where relevant:
+- Small invalidation / partial-work case where relevant:
+- Large invalidation / full-work case where relevant:
 - Optimized:
-- Speedup / memory reduction:
-- Variance / repetitions:
+- Speedup / memory / I/O / quality change:
+- Variance / repetitions / raw samples:
 
 If no controlled benchmark exists, say so explicitly.
 
 ## Validation
 
-How was equivalence/correctness established?
+How was equivalence, correctness, bound soundness, approximation error or other contract compliance established?
 
 ## Target-repo adaptation
 
-Which source constants must be re-profiled rather than copied?
+Which source constants, thresholds, worker counts, bit splits, cache keys, search budgets or tolerances must be re-profiled rather than copied?
 
 ## Failure modes
 
-What can make this optimization invalid or slower?
+What can make this optimization invalid, slower, less robust or misleading?
 
 ## Rollback trigger
 
-Define the condition that disables or reverts the optimization.
+Define the measured or semantic condition that disables/reverts the optimization.
+
+## Composition notes
+
+Which other OPT records compose safely, and which resource/semantic interactions must be re-measured?

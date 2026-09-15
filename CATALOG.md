@@ -2,53 +2,107 @@
 
 ## Quick decision table
 
-| Bottleneck | First record to inspect | Core idea |
+| Bottleneck / problem shape | First record to inspect | Core idea |
 | --- | --- | --- |
-| Test suite spends most time in deterministic sweeps/simulations | `OPT-PY-001` | Reduce redundant work while keeping coverage semantics and deterministic assertions |
-| Same expensive result is recomputed at a provably equivalent parameter/state | `OPT-INV-001` | Prove equivalence, then reuse the already-computed result |
-| Lean CI repeatedly rebuilds an unchanged dependency closure | `OPT-LEAN-001` | Reuse only cryptographically/structurally verified dependency state; always rebuild project source |
-| Independent jobs/items can execute concurrently | `OPT-PAR-001` | Bound workers, preserve deterministic ordering, prove scalar/parallel equivalence |
-| Expensive state changes far slower than the sample/hot-loop rate | `OPT-DSP-001` | Move state evolution to control rate; sparse-evaluate couplings; batch/vectorize the hot path |
+| Deterministic tests/sweeps dominate runtime | `OPT-PY-001` | Reduce redundant/high-cost work while keeping coverage semantics |
+| Same expensive result is recomputed at a proven-equivalent state | `OPT-INV-001` | Prove equivalence, then reuse |
+| Lean dependency reconstruction dominates CI | `OPT-LEAN-001` | Verify reusable dependency state; rebuild current project source |
+| Independent work can execute concurrently | `OPT-PAR-001` | Bound workers and prove scalar/parallel equivalence |
+| Slow control state is inside a high-rate numerical/audio loop | `OPT-DSP-001` | Separate rates, sparse-evaluate, vectorize |
+| Inputs are unchanged but pipeline stages rerun | `OPT-INC-001` | Bind work to complete input signatures and persist only successful state |
+| Many simultaneous callers request identical not-yet-computed work | `OPT-COAL-001` | One in-flight computation, many waiters |
+| Integer sets alternate between sparse and dense regions | `OPT-SET-001` | Density-adaptive representation with exact set algebra |
+| One global lock/counter/runtime domain serializes independent work | `OPT-CONT-001` | Partition coordination while preserving the global invariant |
+| Same deterministic transform is repeated for every consumer/replay | `OPT-FAN-001` | Materialize once, reuse many times |
+| Expensive parameter evaluations are being guessed or exhaustively swept | `OPT-SEARCH-001` | Adaptive, budget-aware search over the declared problem contract |
+| Exactness may be traded inside an explicit quality envelope | `OPT-APPROX-001` | Bound the error/degradation and the resource cost together |
+| Expensive stages consume candidates later discarded | `OPT-REDUCE-001` | Reduce the working set before composition |
+| Non-critical work delays the dependency chain users actually wait on | `OPT-CRIT-001` | Prioritize the critical path; speculate/defer deliberately |
+| Small performance regressions accumulate unnoticed | `OPT-BUDGET-001` | Guard stable performance expectations in CI |
+| Discrete search space is huge but optimistic bounds are available | `OPT-PRUNE-001` | Prune regions that provably cannot beat the incumbent |
 
-## Records
+Before selecting a record, define the target problem using [`OPTIMIZATION-PROBLEM.md`](OPTIMIZATION-PROBLEM.md).
+
+## Frozen v1 records
 
 ### OPT-PY-001 — Deterministic test execution
 
 **Status:** Verified mechanism; historical performance context incomplete.
 
-QEC combined minimal fixtures, vectorized assertions, bounded deterministic caching, convergence/cycle early exit, smaller high-cost sweeps, lower safe iteration/trial counts, and repeated-work removal. QEC v68.4.0 reports about 126 s → 46 s (~2.7×) with 3779 passed / 8 skipped; v68.4.1 reports about 40 s after hardening. The cited v68.x records do not preserve runner/CPU/Python/pytest/repetition metadata, so these are historical observations, not transferable benchmark targets.
+QEC combined minimal fixtures, vectorized assertions, bounded deterministic caching, convergence/cycle early exit, smaller high-cost sweeps, lower safe iteration/trial counts, and repeated-work removal. Historical timings remain source observations, not transferable targets.
 
 ### OPT-INV-001 — Invariant-driven computation reuse
 
 **Status:** Verified mechanism; historical performance context incomplete.
 
-QEC formalized the baseline equivalence `URW(min_sum, rho=1.0) == baseline min-sum`, tested exact equality, centralized the predicate, and reused the baseline result rather than rerunning the benchmark. The implementation commit reports about 43% speedup for that hot test, but does not preserve its runner/toolchain, exact hot-test wall times, or repetitions. Re-measure before making a target-repo speed claim.
+QEC encoded a baseline equivalence, tested exact equality and reused a proven-equivalent baseline result rather than rerunning the benchmark.
 
 ### OPT-LEAN-001 — Trust-preserving Lean CI
 
-**Status:** Verified on QSOL-GEO-REASON PR #3 source lane; timing observations are environment-scoped.
+**Status:** Verified on source PR; timing observations are environment-scoped.
 
-Separates source-state cache identity from compiled dependency artifacts, verifies both before use, rebuilds the current project source, and keeps a no-cache `cold-trust` lane for release-grade reconstruction claims. The cache policy records a 2501.52 s cold dependency build using four Lean threads on a four-CPU `ubuntu-24.04` / x86_64 lane; a later verified-cache run records an 8.47 s GeoReason project build on a four-CPU Ubuntu 24.04.4 hosted runner. These are single observations of different scopes, with no exact CPU model/repetition distribution preserved, so they must not be divided into a portable speedup.
+Separates source-state identity from compiled dependency artifacts, verifies reuse, rebuilds current project source, and keeps cold reconstruction claims separate.
 
 ### OPT-PAR-001 — Bounded parallel execution
 
-**Status:** Verified, environment-specific; performance must be re-measured before transfer.
+**Status:** Verified, environment-specific.
 
-The QEC-validated NEXUS v4.0.1 qBraid evidence compared scalar and worker-count variants, checked output invariants, and recorded observed thread behavior. Its archived seven-worker observation was made on qBraid / Ubuntu 24.04.4 / AMD EPYC 7763 with 16 logical CPUs and effective worker capacity 7. The canonical receipt does not bind the performance samples to an exact `rustc --version`, so OPT retains the numbers as historical evidence rather than a transferable performance target.
+Compares scalar and worker-count variants, checks output invariants and treats measured effective parallelism as evidence rather than assuming requested workers were used.
 
 ### OPT-DSP-001 — Control-rate sparse vector DSP
 
 **Status:** Implemented reference for control-rate/sparse/vector patterns; approximation/native ideas partly proposed.
 
-The SPECTRAL NumPy reference is pinned to commit `5265b7f130287f80b5cf0d3de5bb2953152f90cd`. It precomputes static state, evolves E8/qutrit control state at ~1 kHz, computes all root phases once per control step, uses a sparse root subset per node, and vectorizes block synthesis. The audition renderer's whole-block modulation shortcut has no defined equivalence/error contract and is therefore not promoted as a reusable correctness-preserving optimization. `power_module.md` additionally proposes block SIMD, zero-copy buffers and lock-free/native Rust structures; those native performance claims are not promoted as verified here.
+Precompute static state, evolve slow control state less often, evaluate sparse couplings and batch/vectorize hot numerical work.
+
+The five records above are the immutable v1.0.0 formalized catalog. Their Lean model remains pinned; post-v1 records below do not silently alter it.
+
+## Post-v1 records
+
+### OPT-INC-001 — Signature-bound incremental execution
+Persist complete effective-input identity after successful work and skip a stage only while that identity and required outputs remain valid.
+
+### OPT-COAL-001 — Concurrent duplicate-work coalescing
+Merge equivalent simultaneous misses into one in-flight computation instead of letting a thundering herd duplicate upstream work.
+
+### OPT-SET-001 — Density-adaptive compact sets
+Partition an integer domain and use sparse or bitmap-like containers according to local density while keeping exact set semantics.
+
+### OPT-CONT-001 — Partitioned coordination domains
+Replace one hot global coordination point with independently advancing domains while preserving required cross-domain invariants.
+
+### OPT-FAN-001 — Shared materialization for fan-out and replay
+Perform a deterministic transform once at the production boundary, persist/retain it when justified, and reuse it across consumers and replay.
+
+### OPT-SEARCH-001 — Budget-aware adaptive parameter search
+Classify the optimization problem, maintain a trial ledger, adapt future evaluations from observations, and stop under an explicit evaluation/resource budget.
+
+### OPT-APPROX-001 — Contract-bounded approximation
+Permit approximation only when the interface/scientific contract explicitly defines an error or degradation envelope and a reference path exists where practical.
+
+### OPT-REDUCE-001 — Early working-set reduction
+Push semantics-preserving filtering/culling/selection ahead of joins, rendering, simulation, DSP or other expensive composition.
+
+### OPT-CRIT-001 — Critical-path prioritization
+Prioritize work on the true latency dependency chain; prefetch/precompute likely-soon work only when justified; defer non-critical work.
+
+### OPT-BUDGET-001 — Performance regression budgets
+Protect a stable benchmark expectation with an environment-scoped, variance-aware CI budget rather than relying on remembered performance.
+
+### OPT-PRUNE-001 — Bound-driven search-space pruning
+Maintain a feasible incumbent, derive optimistic bounds for subregions, and discard regions that provably cannot improve the incumbent.
 
 ## Composition guidance
 
-Optimizations compose only when their resource models do. In particular:
+Optimizations compose only when their semantic and resource models compose.
 
-- pytest process parallelism plus BLAS/NumPy threads can oversubscribe CPUs;
-- Lean parallel workers plus large dependency cache restore can raise memory and I/O pressure;
-- a DSP block that is vectorized but allocates an `nodes × samples` temporary may still be unsuitable for hard real-time use;
-- caching an equivalent result is safe only while the equivalence invariant remains true.
+- process parallelism plus BLAS/NumPy/native threads can oversubscribe CPUs;
+- coalescing reduces duplicate identical work while adaptive search may instead need to diversify independent in-flight experiments;
+- a compact representation may make a formerly remote problem feasible in memory, changing the architecture rather than merely reducing bytes;
+- critical-path speculation can steal resources from the path it was intended to accelerate;
+- approximation must never leak into an API whose callers still assume exact semantics;
+- adaptive search can lose information efficiency when parallel batches are too wide;
+- performance budgets require controlled environments or statistically defensible noise handling;
+- pruning is valid only when the bound is sound.
 
-Prefer one measured bottleneck removal at a time, then re-profile.
+Prefer one measured bottleneck removal at a time, then re-profile and reconsider the problem contract.
