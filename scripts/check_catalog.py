@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 from collections import Counter
 from pathlib import Path
@@ -92,6 +93,7 @@ REFERENCE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[[^\]]*\]")
 REFERENCE_LINK_RE = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
 INLINE_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
+SECTION_BOUNDARY_RE = re.compile(r"^#{1,2}(?:\s|$)")
 THEMATIC_BREAK_RE = re.compile(
     r"^(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
 )
@@ -107,7 +109,13 @@ RAW_HTML_BLOCK_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 RAW_HTML_COMPLETE_TAG_RE = re.compile(
-    r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*)?/?>[ \t]*$"
+    r"^ {0,3}(?:"
+    r"</[A-Za-z][A-Za-z0-9-]*[ \t]*>"
+    r"|<[A-Za-z][A-Za-z0-9-]*"
+    r"(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*"
+    r"(?:[ \t]*=[ \t]*(?:\"[^\"]*\"|'[^']*'|[^ \t\n\"'=<>`]+))?)*"
+    r"[ \t]*/?>"
+    r")[ \t]*$"
 )
 EMPHASIS_WRAPPERS = ("**", "__", "~~", "*", "_")
 STATUS_WRAPPERS = ("**", "__", "~~", "*", "_", "`")
@@ -286,7 +294,7 @@ def section_lines(text: str, heading: str) -> list[str]:
         return []
     end = len(lines)
     for i in range(start, len(lines)):
-        if lines[i].startswith("## "):
+        if SECTION_BOUNDARY_RE.match(lines[i]):
             end = i
             break
     return lines[start:end]
@@ -375,8 +383,8 @@ def rendered_inline_text(value: str) -> str:
 
     Contract fields and mandatory section bodies must contain textual substance
     after non-rendering Markdown constructs are removed. Link/image destinations,
-    formatting markers, and HTML tags therefore cannot make empty source count as
-    populated rendered content.
+    formatting markers, HTML tags, and character-reference spelling therefore
+    cannot make empty rendered source count as populated content.
     """
     text = value
     text = INLINE_IMAGE_RE.sub(lambda m: m.group(1), text)
@@ -386,7 +394,7 @@ def rendered_inline_text(value: str) -> str:
     text = INLINE_HTML_TAG_RE.sub("", text)
     text = re.sub(r"[`*_~]", "", text)
     text = re.sub(r"\\(.)", r"\1", text)
-    return text.strip()
+    return html.unescape(text).strip()
 
 
 def has_substantive_rendered_text(value: str) -> bool:
@@ -449,11 +457,15 @@ def require_prefixed_fields(
                 f"{path.relative_to(ROOT)} has markup-only/non-substantive field "
                 f"{field} in {section}: '{value}'"
             )
-        if rejected_values is not None and value == rejected_values.get(field):
-            die(
-                f"{path.relative_to(ROOT)} has unselected template placeholder "
-                f"for {field} in {section}: '{value}'"
-            )
+        if rejected_values is not None:
+            normalized_value = html.unescape(
+                unwrap_outer_formatting(value, STATUS_WRAPPERS)
+            ).strip()
+            if normalized_value == rejected_values.get(field):
+                die(
+                    f"{path.relative_to(ROOT)} has unselected template placeholder "
+                    f"for {field} in {section}: '{value}'"
+                )
 
 
 records: dict[str, Path] = {}
