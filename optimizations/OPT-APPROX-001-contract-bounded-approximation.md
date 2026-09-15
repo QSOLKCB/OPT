@@ -22,6 +22,14 @@ Exact processing has unbounded or unacceptable cost even though the product/scie
 - C: approximation is permitted only by an explicit contract; exact callers are not silently weakened; the error norm, aggregation rule, sequence/composition horizon, and reset boundaries are declared before evaluation; an exact reference path or exact fixture remains available where practical
 - B: target-specific benchmark/quality-evaluation budget over predeclared ordinary, boundary, adversarial, repeated-application, and long-horizon fixtures
 - S: stop when the evaluation budget is exhausted or a validated policy meets the target resource objective while remaining inside the declared quality envelope over the entire declared horizon
+- Variables: continuous / integer / categorical / conditional / mixed, depending on approximation policy
+- Search scope: local or global, explicitly declared for the target
+- Objective behavior: deterministic, noisy, or stochastic depending on the quality/resource metric
+- Information: derivative-free / black-box by default
+- Evaluation cost: moderate to expensive when exact references or long-horizon trajectories are required
+- Constraints: explicit error envelope, semantic/API, resource, horizon/reset, and exact-fallback constraints
+- Parallelism: sequential, synchronous batch, or asynchronous according to target evaluation; stateful validation must preserve trajectory semantics
+- Exactness: approximation explicitly permitted only inside the declared measurable envelope
 
 ## Preserved contract
 

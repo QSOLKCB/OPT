@@ -15,25 +15,33 @@ Independent workers serialize on one globally coordinated resource even though t
 
 ## Optimization problem contract
 
-- X: target-supported shard/domain counts, namespace splits, worker-to-domain mappings, exclusive-ownership/handoff mechanisms, fencing-epoch policies, and merge/aggregation policies
-- F: configurations that preserve the target's required uniqueness, ownership, visibility, failure-domain, and ordering guarantees under steady state, reassignment, restart, delayed-old-owner recovery, and split-brain conditions
+- X: target-supported shard/domain counts, namespace splits, worker-to-domain mappings, merge/aggregation policies, ownership-lease policies, and fencing-epoch schemes
+- F: configurations that preserve the target's required uniqueness, exclusive ownership, visibility, failure-domain, and ordering guarantees through assignment, rebalance, restart, and split-brain recovery
 - f: measured coordination contention, tail latency, and coordination overhead under the declared workload
 - d: minimize under the target's predeclared objective ordering
-- C: partitioning must not silently weaken any global invariant; only the currently fenced/authorized owner of a domain may mutate domain-scoped state, stale owners must be rejected after reassignment, and any intentional shift from global to per-domain ordering is a separately declared contract change
+- C: partitioning must not silently weaken any global invariant; any intentional shift from global to per-domain ordering is a separately declared contract change; mutable domain ownership transitions require one active fenced owner for each epoch
 - B: target-specific contention/scale/failover benchmark budget declared before tuning; no portable shard count or bit split is supplied here
 - S: stop when the budget is exhausted or a validated partitioning materially reduces the target bottleneck without violating C
+- Variables: integer / categorical / mixed
+- Search scope: local architecture/partition-policy tuning
+- Objective behavior: noisy under concurrent load; ownership/uniqueness invariants are deterministic
+- Information: derivative-free / black-box performance measurements
+- Evaluation cost: moderate to expensive at target scale and during failover testing
+- Constraints: uniqueness, ownership, ordering, visibility, failure-domain, lease/fencing, and resource constraints
+- Parallelism: concurrent / asynchronous by construction
+- Exactness: exact ownership/uniqueness semantics; no approximation is introduced
 
 ## Preserved contract
 
-Partitioning must not silently weaken uniqueness, ownership, visibility or ordering guarantees. Reassignment must preserve exclusive authority: once ownership moves, an old worker that remains alive, resumes after a pause, or recovers from a partition must be unable to allocate IDs, process queue ranges, commit writes, or otherwise act as the current owner. If ordering becomes per-domain rather than global, that is a contract change and must be explicit.
+Partitioning must not silently weaken uniqueness, ownership, visibility or ordering guarantees. If ordering becomes per-domain rather than global, that is a contract change and must be explicit. When a domain can be reassigned, only the current fenced owner may mutate that domain; a delayed, partitioned, resumed, or split-brain previous owner must be rejected even if it still believes its old lease is valid.
 
 ## Optimization
 
 Factor a global coordination space into independent domains. Encode domain identity into keys/IDs or route work so each domain can advance mostly independently. Prefer a small explicit merge/aggregation boundary to a permanently hot global lock/counter/poller.
 
-For any domain whose ownership can move, pair routing/assignment with an **exclusive handoff and fencing mechanism**. A typical design uses a durable lease/ownership record containing a monotonically increasing epoch (generation/fencing token). A worker may act for a domain only while holding the current valid lease/epoch, and every mutating downstream action must carry or be checked against that epoch so an older owner is rejected even if it is still running. Reassignment must advance the epoch before the replacement begins authoritative work; the old epoch can never become valid again merely because the old process resumes. Where a lease can expire, expiration alone is insufficient unless the storage/queue/allocator accepting writes also enforces the fencing token.
+For dynamic assignment/rebalance, use an **exclusive handoff with fencing**. A durable coordinator grants ownership together with a monotonically increasing epoch/token. Every state-changing operation that depends on domain ownership carries that epoch, and the authoritative storage/queue/allocation boundary rejects operations from epochs older than the current one. A lease alone is insufficient if an old process can resume after expiry; the fencing token must make stale writes/actions impossible at the mutation boundary. Do not activate the replacement owner until the new epoch is durably authoritative.
 
-If two workers temporarily believe they own the same domain, the durable fencing boundary decides which epoch is authoritative. Recovery may retry idempotent work under the new epoch, but it must not accept stale-owner mutations that could duplicate IDs, process the same queue range twice, or overwrite newer state.
+Where local IDs/counters are used, combine the stable domain identity with the fenced ownership epoch or another target-specific mechanism strong enough to prevent duplicate allocation across reassignment. If IDs must remain stable across ownership epochs, separate the stable domain namespace from the fencing metadata while still rejecting stale mutations.
 
 ## Before / after evidence
 
@@ -45,18 +53,18 @@ If two workers temporarily believe they own the same domain, the durable fencing
 
 ## Validation
 
-Check global invariants across all domains, collision/duplicate behavior, rebalance/restart behavior and target-scale contention profiles.
+Check global invariants across all domains, collision/duplicate behavior, restart behavior and target-scale contention profiles.
 
-Add ownership-race fixtures. Start owner A for a domain, pause/delay it without terminating it, reassign the domain to owner B with a strictly newer fencing epoch, then resume A and prove every A mutation is rejected while B remains authoritative. Repeat with network partitions, lease expiry, process suspension, delayed messages, reordered retries, and split-brain recovery. For ID allocation, prove no duplicate local/global IDs can be emitted or committed across epochs. For queues, prove stale consumers cannot acknowledge/process the reassigned range authoritatively. For stores/counters, verify stale writes are rejected at the mutation boundary, not merely by the router. Exercise repeated reassignments A→B→C and recovery of both older owners.
+Exercise **rebalance/recovery races**: pause an owner, expire/revoke it, assign a higher fencing epoch to a replacement, then resume the old owner and prove every stale mutation/allocation/queue claim is rejected. Inject network partition and split-brain conditions where both old and new processes run simultaneously. Verify only the highest authoritative epoch can mutate state, no duplicate IDs/work claims are produced, handoff is crash-recoverable, and ownership remains unique through coordinator/storage restarts. Include delayed messages from old epochs arriving after the new owner has already committed work.
 
 ## Target-repo adaptation
 
-Shard counts and bit splits are workload-specific. Measure skew, cache locality, failure domains and merge costs. Define the durable ownership record, lease lifetime if any, monotonically increasing fencing epoch, which downstream operations must validate it, handoff ordering, retry/idempotency behavior, and recovery semantics before allowing dynamic reassignment.
+Shard counts and bit splits are workload-specific. Measure skew, cache locality, failure domains and merge costs. Define the durable ownership source, lease timeout if used, monotonically increasing fencing epoch/token, authoritative mutation boundary that validates epochs, handoff sequence, and restart/recovery semantics before enabling dynamic reassignment.
 
 ## Failure modes
 
-Hot shards merely move the bottleneck; domain proliferation raises memory/management overhead; stale owners without fencing can duplicate IDs/work or corrupt state during rebalance; lease expiry without downstream fencing can create split-brain authority; epoch reuse/wraparound or non-durable handoff can resurrect old ownership; rebalancing may violate identity stability; global ordering requirements may make the pattern inadmissible.
+Hot shards merely move the bottleneck; domain proliferation raises memory/management overhead; rebalancing without fencing can allow stale and replacement owners to act concurrently; lease-only ownership can fail when an old process resumes; delayed old-epoch messages can duplicate allocations or queue work; identity stability may be violated; global ordering requirements may make the pattern inadmissible.
 
 ## Rollback trigger
 
-Revert if partitioning does not reduce measured contention, if any cross-domain invariant fails, if a stale owner can mutate state after reassignment, if split-brain tests admit two authoritative epochs, or if fencing/handoff overhead outweighs the coordination benefit.
+Revert if partitioning does not reduce measured contention, if any cross-domain invariant fails, or if failover/rebalance testing shows a stale owner or old-epoch message can mutate state after a replacement owner becomes authoritative.

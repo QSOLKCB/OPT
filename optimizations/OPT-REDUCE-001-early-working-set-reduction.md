@@ -21,6 +21,14 @@ An expensive operation is applied to a large population even though only a small
 - C: the reordered/reduced pipeline is semantically equivalent to the reference for all declared outputs **and observable effects**; an effectful stage may be bypassed for discarded candidates only when those effects/errors are explicitly proven irrelevant by the target contract
 - B: target-specific benchmark budget over representative and adversarial selectivity distributions; no portable selectivity threshold is supplied here
 - S: stop when the declared budget is exhausted or a validated early-reduction placement materially lowers total cost without violating C
+- Variables: categorical / conditional / mixed placement and predicate choices
+- Search scope: local pipeline-reordering / working-set-reduction decisions
+- Objective behavior: noisy for performance; semantic equivalence is deterministic
+- Information: derivative-free / black-box performance measurements
+- Evaluation cost: moderate to expensive depending on downstream stage cost and workload size
+- Constraints: output, ordering/tie/join, side-effect/error, purity, and resource constraints
+- Parallelism: sequential pipeline semantics with target-specific parallel execution only where equivalence remains valid
+- Exactness: exact observable semantics; no approximation is introduced
 
 ## Preserved contract
 

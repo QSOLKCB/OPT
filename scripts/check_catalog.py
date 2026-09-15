@@ -29,6 +29,16 @@ REQUIRED_V2 = {
     "## Rollback trigger",
 }
 REQUIRED_CONTRACT_FIELDS = ("X", "F", "f", "d", "C", "B", "S")
+REQUIRED_CLASSIFICATION_FIELDS = (
+    "Variables",
+    "Search scope",
+    "Objective behavior",
+    "Information",
+    "Evaluation cost",
+    "Constraints",
+    "Parallelism",
+    "Exactness",
+)
 ALLOWED_V2_STATUS_CATEGORIES = {
     "Verified",
     "Verified, environment-specific",
@@ -116,6 +126,20 @@ def normalized_status_category(raw: str) -> str:
     return plain.split(";", 1)[0].strip()
 
 
+def require_prefixed_fields(path: Path, lines: list[str], fields: tuple[str, ...], section: str) -> None:
+    """Require exactly one non-empty '- Field:' row for every declared field."""
+    for field in fields:
+        prefix = f"- {field}:"
+        matches = [line for line in lines if line.startswith(prefix)]
+        if len(matches) != 1:
+            die(
+                f"{path.relative_to(ROOT)} must contain exactly one field "
+                f"'{prefix}' in {section}"
+            )
+        if not matches[0][len(prefix) :].strip():
+            die(f"{path.relative_to(ROOT)} has empty field {field} in {section}")
+
+
 records: dict[str, Path] = {}
 status_categories: dict[str, str] = {}
 for path in sorted(OPT_DIR.glob("OPT-*.md")):
@@ -169,16 +193,18 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
                 )
 
         contract = section_lines(text, "## Optimization problem contract")
-        for field in REQUIRED_CONTRACT_FIELDS:
-            prefix = f"- {field}:"
-            matches = [line for line in contract if line.startswith(prefix)]
-            if len(matches) != 1:
-                die(
-                    f"{path.relative_to(ROOT)} must contain exactly one contract field "
-                    f"'{prefix}' in ## Optimization problem contract"
-                )
-            if not matches[0][len(prefix) :].strip():
-                die(f"{path.relative_to(ROOT)} has empty contract field {field}")
+        require_prefixed_fields(
+            path,
+            contract,
+            REQUIRED_CONTRACT_FIELDS,
+            "## Optimization problem contract",
+        )
+        require_prefixed_fields(
+            path,
+            contract,
+            REQUIRED_CLASSIFICATION_FIELDS,
+            "## Optimization problem contract",
+        )
 
 missing_frozen = sorted(FROZEN_V1 - records.keys())
 if missing_frozen:
@@ -206,34 +232,38 @@ for doc_name in ("README.md", "CATALOG.md"):
             )
 
     if doc_name == "README.md":
-        rows = README_ROW_RE.findall(text)
+        catalog_lines = section_lines(text, "## Catalog")
+        if not catalog_lines:
+            die("README.md is missing a non-empty ## Catalog section")
+        catalog_section = "\n".join(catalog_lines)
+        rows = README_ROW_RE.findall(catalog_section)
         row_ids = [row_id for row_id, _rel, _status in rows]
         counts = Counter(row_ids)
         bad_counts = sorted(record_id for record_id, count in counts.items() if count != 1)
         if bad_counts:
             die(
-                "README.md catalog table must index each record exactly once; "
+                "README.md ## Catalog table must index each record exactly once; "
                 f"bad row counts for: {', '.join(bad_counts)}"
             )
         missing_readme = sorted(records.keys() - counts.keys())
         if missing_readme:
-            die(f"README.md catalog table is missing record(s): {', '.join(missing_readme)}")
+            die(f"README.md ## Catalog table is missing record(s): {', '.join(missing_readme)}")
         unknown_rows = sorted(counts.keys() - records.keys())
         if unknown_rows:
-            die(f"README.md catalog table references unknown record(s): {', '.join(unknown_rows)}")
+            die(f"README.md ## Catalog table references unknown record(s): {', '.join(unknown_rows)}")
 
         row_statuses: dict[str, str] = {}
         for row_id, rel, raw_status in rows:
             if record_paths.get(rel) != row_id:
-                die(f"README.md row identity mismatch for {row_id}: {rel}")
+                die(f"README.md ## Catalog row identity mismatch for {row_id}: {rel}")
             if row_id in row_statuses:
-                die(f"README.md has duplicate status row for {row_id}")
+                die(f"README.md ## Catalog has duplicate status row for {row_id}")
             row_statuses[row_id] = normalized_status_category(raw_status)
 
         for record_id, expected_status in status_categories.items():
             observed_status = row_statuses.get(record_id)
             if observed_status is None:
-                die(f"README.md has no catalog status cell for post-v1 record {record_id}")
+                die(f"README.md ## Catalog has no status cell for post-v1 record {record_id}")
             if observed_status != expected_status:
                 die(
                     f"README.md status mismatch for {record_id}: "

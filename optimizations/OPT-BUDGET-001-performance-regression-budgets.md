@@ -22,6 +22,14 @@ Small performance regressions accumulate because performance is measured occasio
 - C: the performance gate must not incentivize weakening tests, assertions, evidence, semantic coverage, or representative workload inputs; the gate itself must continue to detect known regressions and accept known-good controls within the declared false-positive/false-negative envelope
 - B: target-specific calibration budget specifying repetitions, environment samples, and allowable CI/runtime measurement cost
 - S: stop calibration when the declared sample budget is exhausted or the baseline/noise estimate is stable enough to justify the predeclared warning and hard thresholds
+- Variables: continuous / integer / categorical / mixed metric, statistic, fixture, and threshold choices
+- Search scope: local gate/calibration tuning
+- Objective behavior: noisy / stochastic measurement distributions
+- Information: derivative-free statistical observations
+- Evaluation cost: moderate to expensive depending on repetitions and fixture scale
+- Constraints: functional correctness, representative workload, statistical tolerance, runner/environment characterization, false-positive/false-negative, and CI-overhead constraints
+- Parallelism: sequential or synchronous-batch calibration; parallel sampling only when runner interference is characterized
+- Exactness: no semantic approximation; statistical tolerance/noise handling is explicit
 
 ## Preserved contract
 
