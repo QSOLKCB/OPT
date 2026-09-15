@@ -86,6 +86,11 @@ EMPTY_LABEL_RE = re.compile(r"^-\s+[^:]+:\s*$")
 LINK_REFERENCE_DEFINITION_RE = re.compile(
     r"^\[(?:\\.|[^\[\]\\])+\]:[ \t]+\S.*$"
 )
+INLINE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+INLINE_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+REFERENCE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[[^\]]*\]")
+REFERENCE_LINK_RE = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
+INLINE_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
 THEMATIC_BREAK_RE = re.compile(
     r"^(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
@@ -365,6 +370,29 @@ def parse_record_link_cell(cell: str, context: str) -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
+def rendered_inline_text(value: str) -> str:
+    """Approximate visible inline text for required field-value validation.
+
+    Contract fields must contain textual substance after non-rendering Markdown
+    constructs are removed. Link/image destinations, formatting markers, and HTML
+    tags therefore cannot make an otherwise empty field count as populated.
+    """
+    text = value
+    text = INLINE_IMAGE_RE.sub(lambda m: m.group(1), text)
+    text = INLINE_LINK_RE.sub(lambda m: m.group(1), text)
+    text = REFERENCE_IMAGE_RE.sub(lambda m: m.group(1), text)
+    text = REFERENCE_LINK_RE.sub(lambda m: m.group(1), text)
+    text = INLINE_HTML_TAG_RE.sub("", text)
+    text = re.sub(r"[`*_~]", "", text)
+    text = re.sub(r"\\(.)", r"\1", text)
+    return text.strip()
+
+
+def has_substantive_rendered_text(value: str) -> bool:
+    """Require at least one visible alphanumeric character after inline parsing."""
+    return any(ch.isalnum() for ch in rendered_inline_text(value))
+
+
 def is_structural_only_line(line: str) -> bool:
     if HEADING_RE.match(line) or THEMATIC_BREAK_RE.fullmatch(line):
         return True
@@ -413,6 +441,11 @@ def require_prefixed_fields(
         value = matches[0][len(prefix) :].strip()
         if not value:
             die(f"{path.relative_to(ROOT)} has empty field {field} in {section}")
+        if not has_substantive_rendered_text(value):
+            die(
+                f"{path.relative_to(ROOT)} has markup-only/non-substantive field "
+                f"{field} in {section}: '{value}'"
+            )
         if rejected_values is not None and value == rejected_values.get(field):
             die(
                 f"{path.relative_to(ROOT)} has unselected template placeholder "
