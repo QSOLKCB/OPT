@@ -42,9 +42,9 @@ The immutable `v1.0.0` release and its five original records are formalized by t
 
 The new [`OPTIMIZATION-PROBLEM.md`](OPTIMIZATION-PROBLEM.md) supplies a canonical problem contract for future records:
 
-`P = (X, F, f, direction, C, B, S)`
+`P = (X, F, f, d, C, B, S)`
 
-for search space, feasible set, objective, direction, correctness/semantic constraints, evaluation budget and stopping rule.
+where `d` is the objective direction/order; the remaining components are search space, feasible set, objective, correctness/semantic constraints, evaluation budget and stopping rule.
 
 ## Source material
 
@@ -54,7 +54,9 @@ for search space, feasible set, objective, direction, correctness/semantic const
 - [`sources/WPO.md`](sources/WPO.md) — critical-path and performance-budget discovery source.
 - [`sources/MATHEMATICAL-OPTIMIZATION.md`](sources/MATHEMATICAL-OPTIMIZATION.md) — mathematical/combinatorial problem vocabulary and pruning foundations.
 - [`power_module.md`](power_module.md) — E8/qutrit DSP architecture that motivated **OPT-DSP-001**.
-- [`suxen.zip`](suxen.zip) — opaque source archive, still **not promoted as optimization evidence**.
+- [`sources/SUXEN.md`](sources/SUXEN.md) — provenance and the required bounded recursive inventory procedure for the opaque `suxen.zip` source candidate.
+- [`scripts/inventory_zip.py`](scripts/inventory_zip.py) — bounded recursive ZIP inventory entry point; use the explicit limits documented in `sources/SUXEN.md` rather than generic/unbounded extraction.
+- [`suxen.zip`](suxen.zip) — opaque source archive, still **not promoted as optimization evidence** until the bounded inventory identifies reusable mechanisms.
 
 ## Integrity gate
 
