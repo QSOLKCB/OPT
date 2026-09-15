@@ -75,25 +75,22 @@ TEMPLATE_PLACEHOLDER_LINES = {
 }
 
 LINK_RE = re.compile(r"\[([^\]]+)\]\((optimizations/[^)#]+\.md)\)")
+RECORD_LINK_CELL_RE = re.compile(
+    r"^\[(OPT-[A-Z]+-\d{3})\]\((optimizations/[^)#]+\.md)\)$"
+)
 ID_RE = re.compile(r"^# (OPT-[A-Z]+-\d{3}) — ")
 FILENAME_ID_RE = re.compile(r"^(OPT-[A-Z]+-\d{3})-")
 STATUS_RE = re.compile(r"^\*\*Status:\*\*\s*(.*?)\s*$")
 OPT_TOKEN_RE = re.compile(r"\bOPT-[A-Z]+-\d{3}\b")
 EMPTY_LABEL_RE = re.compile(r"^-\s+[^:]+:\s*$")
-README_ROW_RE = re.compile(
-    r"^\|\s*\[(OPT-[A-Z]+-\d{3})\]\((optimizations/[^)#]+\.md)\)"
-    r"\s*\|[^|]*\|\s*([^|]+?)\s*\|",
-    re.MULTILINE,
-)
-CATALOG_DECISION_ROW_RE = re.compile(
-    r"^\|[^|\n]*\|\s*\[(OPT-[A-Z]+-\d{3})\]\((optimizations/[^)#]+\.md)\)\s*\|",
-    re.MULTILINE,
-)
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
-THEMATIC_BREAK_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
+THEMATIC_BREAK_RE = re.compile(
+    r"^(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
+)
 LIST_MARKER_ONLY_RE = re.compile(r"^(?:[-+*]|\d+[.)])$")
 TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
 FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+EMPHASIS_WRAPPERS = ("**", "__", "~~", "*", "_")
 CANONICAL_DEFINITION_PATTERNS = {
     "X": re.compile(r"^- `X` — \S"),
     "F": re.compile(r"^- `F(?: ⊆ X)?` — \S"),
@@ -109,31 +106,48 @@ def die(msg: str) -> None:
     raise SystemExit(f"catalog-integrity: {msg}")
 
 
-def strip_html_comments(text: str) -> str:
-    """Strip HTML comments; an unmatched opener hides the remainder through EOF."""
-    visible: list[str] = []
+def strip_html_comments_from_visible_line(
+    raw: str, in_comment: bool
+) -> tuple[str, bool]:
+    """Remove HTML comments from a non-fenced line, carrying unmatched state."""
+    out: list[str] = []
     cursor = 0
-    while True:
-        start = text.find("<!--", cursor)
-        if start < 0:
-            visible.append(text[cursor:])
-            break
-        visible.append(text[cursor:start])
-        end = text.find("-->", start + 4)
+
+    if in_comment:
+        end = raw.find("-->")
         if end < 0:
+            return "", True
+        cursor = end + 3
+        in_comment = False
+
+    while cursor < len(raw):
+        start = raw.find("<!--", cursor)
+        if start < 0:
+            out.append(raw[cursor:])
+            break
+        out.append(raw[cursor:start])
+        end = raw.find("-->", start + 4)
+        if end < 0:
+            in_comment = True
             break
         cursor = end + 3
-    return "".join(visible)
+
+    return "".join(out), in_comment
 
 
 def visible_nonfenced_lines(lines: list[str]) -> list[str]:
-    """Return rendered-ish Markdown lines, excluding comments and fenced blocks."""
-    cleaned = strip_html_comments("\n".join(lines))
+    """Return rendered-ish Markdown lines, excluding comments and fenced blocks.
+
+    Fence state is determined from the original Markdown line before HTML comments
+    are removed, so a fence-looking line with trailing comment text cannot become
+    a valid closer after preprocessing.
+    """
     visible: list[str] = []
     fence_char: str | None = None
     fence_len = 0
+    in_comment = False
 
-    for raw in cleaned.splitlines():
+    for raw in lines:
         if fence_char is not None:
             close = re.fullmatch(
                 rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*", raw
@@ -143,19 +157,29 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                 fence_len = 0
             continue
 
-        opener = FENCE_OPEN_RE.match(raw)
-        if opener is not None:
-            run = opener.group(1)
-            info = opener.group(2)
-            # CommonMark forbids backticks inside an opening backtick fence's info string.
-            if run[0] == "`" and "`" in info:
-                visible.append(raw)
+        if in_comment:
+            rendered, in_comment = strip_html_comments_from_visible_line(raw, True)
+            if in_comment:
                 continue
-            fence_char = run[0]
-            fence_len = len(run)
-            continue
+            raw_for_parse = rendered
+        else:
+            # A fence opener is recognized from the original line. This matters
+            # because HTML comment syntax in a fence info string is literal text.
+            opener = FENCE_OPEN_RE.match(raw)
+            if opener is not None:
+                run = opener.group(1)
+                info = opener.group(2)
+                if run[0] != "`" or "`" not in info:
+                    fence_char = run[0]
+                    fence_len = len(run)
+                    continue
+            raw_for_parse, in_comment = strip_html_comments_from_visible_line(raw, False)
 
-        visible.append(raw)
+        if raw_for_parse:
+            visible.append(raw_for_parse)
+        elif not in_comment and raw == "":
+            visible.append("")
+
     return visible
 
 
@@ -187,8 +211,8 @@ def markdown_table_cells(line: str) -> list[str] | None:
 
 def extract_markdown_table(
     lines: list[str], expected_headers: tuple[str, ...], context: str
-) -> list[str]:
-    """Extract one visible table and require well-formed, non-empty data cells."""
+) -> list[list[str]]:
+    """Extract one visible table and return validated data rows as cell lists."""
     visible = visible_nonfenced_lines(lines)
     expected = list(expected_headers)
     for i, line in enumerate(visible):
@@ -203,7 +227,8 @@ def extract_markdown_table(
             or not all(TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in separator)
         ):
             die(f"{context} table has an invalid separator row")
-        table = [line, visible[i + 1]]
+
+        rows: list[list[str]] = []
         for row in visible[i + 2 :]:
             cells = markdown_table_cells(row)
             if cells is None:
@@ -215,9 +240,35 @@ def extract_markdown_table(
                 )
             if any(not cell for cell in cells):
                 die(f"{context} table row contains an empty required cell: {row.strip()}")
-            table.append(row)
-        return table
+            rows.append(cells)
+        return rows
     die(f"{context} is missing the expected Markdown table")
+
+
+def unwrap_markdown_emphasis(cell: str) -> str:
+    """Remove balanced outer emphasis wrappers; do not unwrap code spans."""
+    value = cell.strip()
+    changed = True
+    while changed:
+        changed = False
+        for marker in EMPHASIS_WRAPPERS:
+            if (
+                len(value) > 2 * len(marker)
+                and value.startswith(marker)
+                and value.endswith(marker)
+            ):
+                value = value[len(marker) : -len(marker)].strip()
+                changed = True
+                break
+    return value
+
+
+def parse_record_link_cell(cell: str, context: str) -> tuple[str, str]:
+    value = unwrap_markdown_emphasis(cell)
+    match = RECORD_LINK_CELL_RE.fullmatch(value)
+    if match is None:
+        die(f"{context} has invalid record-link cell: {cell}")
+    return match.group(1), match.group(2)
 
 
 def is_structural_only_line(line: str) -> bool:
@@ -350,7 +401,7 @@ for doc_name in ("README.md", "CATALOG.md"):
         target_id = record_paths.get(rel)
         if target_id is None:
             die(f"record link in {doc_name} is not a discovered OPT record: {rel}")
-        if label.strip() != target_id:
+        if re.sub(r"[*_~]", "", label).strip() != target_id:
             die(
                 f"record link label mismatch in {doc_name}: '{label}' points to "
                 f"{target_id} ({rel})"
@@ -362,13 +413,18 @@ for doc_name in ("README.md", "CATALOG.md"):
     catalog_lines = section_lines(text, "## Catalog")
     if not catalog_lines:
         die("README.md is missing a non-empty visible ## Catalog section")
-    catalog_table = extract_markdown_table(
+    catalog_rows = extract_markdown_table(
         catalog_lines,
         ("ID", "Optimization", "Status", "Core idea"),
         "README.md ## Catalog",
     )
-    rows = README_ROW_RE.findall("\n".join(catalog_table))
-    counts = Counter(row_id for row_id, _rel, _status in rows)
+
+    parsed_rows: list[tuple[str, str, str]] = []
+    for cells in catalog_rows:
+        row_id, rel = parse_record_link_cell(cells[0], "README.md ## Catalog")
+        parsed_rows.append((row_id, rel, cells[2]))
+
+    counts = Counter(row_id for row_id, _rel, _status in parsed_rows)
     bad_counts = sorted(record_id for record_id, count in counts.items() if count != 1)
     if bad_counts:
         die(
@@ -383,7 +439,7 @@ for doc_name in ("README.md", "CATALOG.md"):
         die(f"README.md ## Catalog table references unknown record(s): {', '.join(unknown_rows)}")
 
     row_statuses: dict[str, str] = {}
-    for row_id, rel, raw_status in rows:
+    for row_id, rel, raw_status in parsed_rows:
         if record_paths.get(rel) != row_id:
             die(f"README.md ## Catalog row identity mismatch for {row_id}: {rel}")
         if row_id in row_statuses:
@@ -413,13 +469,20 @@ for record_id, path in records.items():
 decision_lines = section_lines(catalog, "## Quick decision table")
 if not decision_lines:
     die("CATALOG.md is missing a non-empty visible ## Quick decision table section")
-decision_table = extract_markdown_table(
+decision_rows = extract_markdown_table(
     decision_lines,
     ("Bottleneck / problem shape", "First record to inspect", "Core idea"),
     "CATALOG.md ## Quick decision table",
 )
-decision_rows = CATALOG_DECISION_ROW_RE.findall("\n".join(decision_table))
-decision_counts = Counter(record_id for record_id, _rel in decision_rows)
+
+parsed_decisions: list[tuple[str, str]] = []
+for cells in decision_rows:
+    row_id, rel = parse_record_link_cell(
+        cells[1], "CATALOG.md ## Quick decision table"
+    )
+    parsed_decisions.append((row_id, rel))
+
+decision_counts = Counter(record_id for record_id, _rel in parsed_decisions)
 bad_decision_counts = sorted(
     record_id for record_id, count in decision_counts.items() if count != 1
 )
@@ -440,7 +503,7 @@ if unknown_decision:
         "CATALOG.md ## Quick decision table references unknown record(s): "
         f"{', '.join(unknown_decision)}"
     )
-for row_id, rel in decision_rows:
+for row_id, rel in parsed_decisions:
     if record_paths.get(rel) != row_id:
         die(f"CATALOG.md ## Quick decision table row identity mismatch for {row_id}: {rel}")
 
