@@ -54,12 +54,17 @@ Before choosing an optimizer, classify:
 
 ## Status vocabulary
 
+Post-v1 records must use one of these exact status categories. A semicolon may follow the category with a short evidence-boundary caveat; `scripts/check_catalog.py` validates the category before that semicolon.
+
 - **Verified**: source project contains passing validation and measured/observed evidence.
 - **Verified, environment-specific**: measured result is real but not a universal performance guarantee.
-- **Implemented reference**: the mechanism exists in code, but no general speedup claim is made.
-- **Implemented external reference/pattern**: mechanism exists in an external donor; target transfer still requires local validation.
+- **Implemented reference**: the mechanism exists in repository code, but no general speedup claim is made.
+- **Implemented external reference**: the mechanism exists in an external donor; target transfer still requires local validation.
+- **Implemented external pattern**: an external donor demonstrates the pattern, but this OPT record does not claim a target implementation.
 - **Proposed / OPT synthesis**: architecture/design guidance only. Do not report it as achieved performance.
 - **Source candidate**: material exists but has not been inspected sufficiently to promote claims.
+
+The frozen v1 records retain their historical release wording and are exempt from post-v1 status normalization.
 
 ## Non-negotiable rules
 

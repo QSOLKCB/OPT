@@ -1,6 +1,6 @@
 # OPT-CRIT-001 — Critical-path prioritization
 
-**Status:** Established performance-engineering pattern; target validation required  
+**Status:** Proposed / OPT synthesis; target validation required  
 **Domains:** UI, web, games, build systems, model/data loading, interactive pipelines
 
 ## Source evidence
@@ -41,7 +41,7 @@ Execute critical dependencies first; prefetch/precompute likely-soon work only w
 
 ## Validation
 
-Trace the true dependency path and measure end-to-end latency, not only individual task duration. Test cold/warm, cache-hit/miss and wrong-speculation cases.
+Trace the true dependency path and measure end-to-end latency, not only individual task duration. Test cold/warm, cache-hit/miss and wrong-speculation cases. Explicitly test semantic deadlines, starvation, cancellation, and that speculative work cannot expose side effects before commitment.
 
 ## Target-repo adaptation
 
@@ -49,8 +49,8 @@ Criticality and prediction horizons are workload-specific. Re-profile after topo
 
 ## Failure modes
 
-Speculation steals resources from critical work, lazy work causes later latency cliffs, priorities become stale, or deferred tasks starve.
+Speculation steals resources from critical work, lazy work causes later latency cliffs, priorities become stale, deferred tasks starve, semantic deadlines are missed, or speculative side effects escape before commitment.
 
 ## Rollback trigger
 
-Disable speculative/deferred policy if critical-path latency or resource pressure worsens materially.
+Immediately disable/revert the policy on any violation of C, including a required task missing its semantic deadline or speculative work exposing an externally visible side effect before commitment. Also disable it if critical-path latency or resource pressure worsens materially.

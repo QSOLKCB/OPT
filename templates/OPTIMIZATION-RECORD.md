@@ -1,7 +1,9 @@
 # OPT-XXX-000 — Optimization Name
 
-**Status:** Proposed / Implemented reference / Implemented external reference / Verified / Verified, environment-specific  
+**Status:**  
 **Domains:** ...
+
+Choose one documented status category from `README4AI.md` and replace every placeholder below before promoting this file into `optimizations/`.
 
 ## Source evidence
 
@@ -16,15 +18,15 @@ What dominates runtime, latency, memory, I/O, CI cost, quality budget or optimiz
 
 ## Optimization problem contract
 
-Define the target using `OPTIMIZATION-PROBLEM.md`. Keep these seven canonical fields as exact list prefixes so catalog integrity can verify the contract:
+Define the target using `OPTIMIZATION-PROBLEM.md`. Keep these seven canonical fields as exact list prefixes so catalog integrity can verify the contract. **They are intentionally empty in this template and must be filled with record-specific values.**
 
-- X: search space / decision-variable domain
-- F: feasible set after hard constraints
-- f: measured objective or objective vector
-- d: minimize / maximize / explicit multi-objective ordering
-- C: correctness and semantic contract that may not be weakened implicitly
-- B: evaluation/resource budget
-- S: stopping rule
+- X:
+- F:
+- f:
+- d:
+- C:
+- B:
+- S:
 
 Then record useful classification detail:
 

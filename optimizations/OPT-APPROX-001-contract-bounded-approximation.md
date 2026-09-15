@@ -1,6 +1,6 @@
 # OPT-APPROX-001 — Contract-bounded approximation
 
-**Status:** External production pattern + existing OPT need; target-specific proof/measurement required  
+**Status:** Proposed / OPT synthesis; external production pattern, target-specific proof/measurement required  
 **Domains:** visualization, search, streaming, telemetry, simulation, audition DSP
 
 ## Source evidence

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,8 +29,19 @@ REQUIRED_V2 = {
     "## Rollback trigger",
 }
 REQUIRED_CONTRACT_FIELDS = ("X", "F", "f", "d", "C", "B", "S")
-LINK_RE = re.compile(r"\[[^\]]+\]\((optimizations/[^)#]+\.md)\)")
+ALLOWED_V2_STATUS_CATEGORIES = {
+    "Verified",
+    "Verified, environment-specific",
+    "Implemented reference",
+    "Implemented external reference",
+    "Implemented external pattern",
+    "Proposed / OPT synthesis",
+    "Source candidate",
+}
+LINK_RE = re.compile(r"\[([^\]]+)\]\((optimizations/[^)#]+\.md)\)")
 ID_RE = re.compile(r"^# (OPT-[A-Z]+-\d{3}) — ")
+FILENAME_ID_RE = re.compile(r"^(OPT-[A-Z]+-\d{3})-")
+STATUS_RE = re.compile(r"^\*\*Status:\*\*\s*(.*?)\s*$")
 
 
 def die(msg: str) -> None:
@@ -60,13 +72,36 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
     if not match:
         die(f"bad record heading: {path.relative_to(ROOT)}")
     record_id = match.group(1)
+
+    filename_match = FILENAME_ID_RE.match(path.name)
+    if not filename_match:
+        die(f"record filename does not begin with an OPT ID: {path.relative_to(ROOT)}")
+    filename_id = filename_match.group(1)
+    if filename_id != record_id:
+        die(
+            f"record ID mismatch: {path.relative_to(ROOT)} declares {record_id} "
+            f"but filename encodes {filename_id}"
+        )
+
     if record_id in records:
         die(f"duplicate record id {record_id}: {records[record_id]} and {path}")
     records[record_id] = path
-    if "**Status:**" not in text:
-        die(f"missing Status in {path.relative_to(ROOT)}")
+
+    status_matches = [STATUS_RE.match(line) for line in lines]
+    statuses = [m.group(1).strip() for m in status_matches if m is not None]
+    if len(statuses) != 1:
+        die(f"{path.relative_to(ROOT)} must contain exactly one Status line")
+    if not statuses[0]:
+        die(f"{path.relative_to(ROOT)} has empty Status")
 
     if record_id not in FROZEN_V1:
+        status_category = statuses[0].split(";", 1)[0].strip()
+        if status_category not in ALLOWED_V2_STATUS_CATEGORIES:
+            die(
+                f"{path.relative_to(ROOT)} uses undefined status category "
+                f"'{status_category}'"
+            )
+
         headings = {line for line in lines if line.startswith("## ")}
         missing = sorted(REQUIRED_V2 - headings)
         if missing:
@@ -88,18 +123,37 @@ missing_frozen = sorted(FROZEN_V1 - records.keys())
 if missing_frozen:
     die(f"frozen v1 record(s) missing: {', '.join(missing_frozen)}")
 
-# README is the human-facing record index and must contain real Markdown links.
-# CATALOG may use either links or plain/backticked record IDs; any links it does
-# contain are still validated below, while complete catalog coverage is enforced
-# independently by record ID.
+record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in records.items()}
+
+# README is the complete human-facing record index. CATALOG may use either
+# links or plain/backticked IDs, but any optimization-record link in either
+# document must use the target record's stable ID as its label.
 for doc_name in ("README.md", "CATALOG.md"):
     text = (ROOT / doc_name).read_text(encoding="utf-8")
     links = LINK_RE.findall(text)
-    if doc_name == "README.md" and not links:
-        die("README.md contains no optimization-record links")
-    for rel in links:
-        if not (ROOT / rel).is_file():
+    linked_ids: list[str] = []
+    for label, rel in links:
+        target = ROOT / rel
+        if not target.is_file():
             die(f"broken record link in {doc_name}: {rel}")
+        target_id = record_paths.get(rel)
+        if target_id is None:
+            die(f"record link in {doc_name} is not a discovered OPT record: {rel}")
+        if label.strip() != target_id:
+            die(
+                f"record link label mismatch in {doc_name}: '{label}' points to "
+                f"{target_id} ({rel})"
+            )
+        linked_ids.append(target_id)
+
+    if doc_name == "README.md":
+        counts = Counter(linked_ids)
+        duplicates = sorted(record_id for record_id, count in counts.items() if count != 1)
+        if duplicates:
+            die(f"README.md must index each record exactly once; bad counts for: {', '.join(duplicates)}")
+        missing_readme = sorted(records.keys() - counts.keys())
+        if missing_readme:
+            die(f"README.md is missing record(s): {', '.join(missing_readme)}")
 
 catalog = (ROOT / "CATALOG.md").read_text(encoding="utf-8")
 for record_id, path in records.items():

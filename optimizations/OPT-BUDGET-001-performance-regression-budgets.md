@@ -1,6 +1,6 @@
 # OPT-BUDGET-001 — Performance regression budgets
 
-**Status:** Established engineering pattern; enforcement must be environment-scoped  
+**Status:** Proposed / OPT synthesis; target calibration required  
 **Domains:** CI, web, numerical kernels, builds, services, DSP
 
 ## Source evidence

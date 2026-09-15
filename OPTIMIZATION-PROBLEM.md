@@ -54,11 +54,12 @@ Record the following before tuning:
 ### Approximate visualization
 
 - `X = {LOD policies}`
-- `F = policies satisfying frame-memory limits`
+- `F = policies satisfying frame-memory limits and error ≤ ε`
 - `f = (frame latency, perceptual/error metric)`
-- `C = error ≤ ε and reference path remains available`
-- `B = fixed benchmark fixture set`
-- `S = Pareto candidate chosen under the documented priority rule`
+- `d = lexicographic: first require error ≤ ε through F/C, then minimize frame latency; break equal-latency ties by lower error`
+- `C = reference path remains available and declared visual/semantic invariants are preserved`
+- `B = at most 200 policy evaluations over the fixed benchmark fixture set`
+- `S = stop when B is exhausted or no admissible policy improves frame latency by the predeclared δ for 20 consecutive evaluations`
 
 ## Search-mechanism selection
 

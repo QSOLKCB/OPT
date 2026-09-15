@@ -22,17 +22,17 @@ The point of this repository is simple: when a future project needs to go faster
 | [OPT-LEAN-001](optimizations/OPT-LEAN-001-trust-preserving-lean-ci.md) | Trust-preserving Lean dependency reuse | **Verified on source PR; timings environment-scoped** | Reuse verified dependency state while rebuilding current project source |
 | [OPT-PAR-001](optimizations/OPT-PAR-001-bounded-parallel-execution.md) | Bounded deterministic parallel execution | **Verified, environment-specific** | Bound concurrency and prove scalar/parallel equivalence |
 | [OPT-DSP-001](optimizations/OPT-DSP-001-control-rate-sparse-vector-dsp.md) | Control-rate + sparse + vectorized DSP | **Implemented reference; approximation/native ideas proposed** | Move slow state out of the hot path; sparse/vectorize repeated numerical work |
-| [OPT-INC-001](optimizations/OPT-INC-001-signature-bound-incremental-execution.md) | Signature-bound incremental execution | **Implemented historical reference** | Rerun work only when complete effective-input identity changes |
+| [OPT-INC-001](optimizations/OPT-INC-001-signature-bound-incremental-execution.md) | Signature-bound incremental execution | **Implemented external reference** | Rerun work only when complete effective-input identity changes |
 | [OPT-COAL-001](optimizations/OPT-COAL-001-concurrent-duplicate-work-coalescing.md) | Concurrent duplicate-work coalescing | **Implemented external reference** | Share one in-flight computation among equivalent simultaneous callers |
 | [OPT-SET-001](optimizations/OPT-SET-001-density-adaptive-compact-sets.md) | Density-adaptive compact sets | **Implemented external reference** | Choose sparse/dense representation locally while retaining exact set algebra |
 | [OPT-CONT-001](optimizations/OPT-CONT-001-partitioned-coordination-domains.md) | Partitioned coordination domains | **Implemented external pattern** | Split one global contention hotspot into independent domains while preserving global invariants |
 | [OPT-FAN-001](optimizations/OPT-FAN-001-shared-materialization-fanout.md) | Shared materialization for fan-out/replay | **Implemented external reference** | Transform/encode once and reuse the representation for many consumers |
-| [OPT-SEARCH-001](optimizations/OPT-SEARCH-001-budget-aware-adaptive-search.md) | Budget-aware adaptive parameter search | **External mechanisms; OPT synthesis proposed** | Spend expensive evaluations where they are most informative |
-| [OPT-APPROX-001](optimizations/OPT-APPROX-001-contract-bounded-approximation.md) | Contract-bounded approximation | **Target-specific validation required** | Trade exactness only inside an explicit measurable error/degradation envelope |
+| [OPT-SEARCH-001](optimizations/OPT-SEARCH-001-budget-aware-adaptive-search.md) | Budget-aware adaptive parameter search | **Proposed / OPT synthesis** | Spend expensive evaluations where they are most informative |
+| [OPT-APPROX-001](optimizations/OPT-APPROX-001-contract-bounded-approximation.md) | Contract-bounded approximation | **Proposed / OPT synthesis** | Trade exactness only inside an explicit measurable error/degradation envelope |
 | [OPT-REDUCE-001](optimizations/OPT-REDUCE-001-early-working-set-reduction.md) | Early working-set reduction | **Implemented external pattern** | Filter/cull/limit before expensive composition |
-| [OPT-CRIT-001](optimizations/OPT-CRIT-001-critical-path-prioritization.md) | Critical-path prioritization | **Established engineering pattern** | Do critical work now, speculate carefully, defer non-critical work |
-| [OPT-BUDGET-001](optimizations/OPT-BUDGET-001-performance-regression-budgets.md) | Performance regression budgets | **Established engineering pattern** | Turn performance expectations into environment-scoped regression contracts |
-| [OPT-PRUNE-001](optimizations/OPT-PRUNE-001-bound-driven-search-space-pruning.md) | Bound-driven search-space pruning | **Classical optimization mechanism** | Prove whole search regions cannot improve the incumbent and skip them |
+| [OPT-CRIT-001](optimizations/OPT-CRIT-001-critical-path-prioritization.md) | Critical-path prioritization | **Proposed / OPT synthesis** | Do critical work now, speculate carefully, defer non-critical work |
+| [OPT-BUDGET-001](optimizations/OPT-BUDGET-001-performance-regression-budgets.md) | Performance regression budgets | **Proposed / OPT synthesis** | Turn performance expectations into environment-scoped regression contracts |
+| [OPT-PRUNE-001](optimizations/OPT-PRUNE-001-bound-driven-search-space-pruning.md) | Bound-driven search-space pruning | **Proposed / OPT synthesis** | Prove whole search regions cannot improve the incumbent and skip them |
 
 See [CATALOG.md](CATALOG.md) for the decision map and [README4AI.md](README4AI.md) for machine-oriented usage.
 
@@ -58,7 +58,7 @@ for search space, feasible set, objective, direction, correctness/semantic const
 
 ## Integrity gate
 
-`scripts/check_catalog.py` verifies record IDs, required post-v1 sections, catalog coverage and local optimization-record links. CI runs it via `.github/workflows/catalog-integrity.yml`.
+`scripts/check_catalog.py` verifies heading/filename identity, post-v1 status vocabulary, complete contracts, complete README coverage, CATALOG coverage, and optimization-record link labels/targets. CI runs it via `.github/workflows/catalog-integrity.yml`.
 
 ## Add the next optimization
 

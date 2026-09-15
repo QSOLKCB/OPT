@@ -1,6 +1,6 @@
 # OPT-SEARCH-001 — Budget-aware adaptive parameter search
 
-**Status:** Implemented external mechanisms; OPT synthesis proposed for target tuning  
+**Status:** Proposed / OPT synthesis; upstream mechanisms are implemented externally  
 **Domains:** expensive black-box tuning, CI/runtime parameters, simulation, numerical kernels
 
 ## Source evidence

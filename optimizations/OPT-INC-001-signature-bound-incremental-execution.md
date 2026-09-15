@@ -1,6 +1,6 @@
 # OPT-INC-001 — Signature-bound incremental execution
 
-**Status:** Implemented historical reference; target validation required  
+**Status:** Implemented external reference; historical donor, target validation required  
 **Domains:** builds, CI, generated artifacts, preprocessing, scientific pipelines
 
 ## Source evidence
