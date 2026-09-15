@@ -158,7 +158,7 @@ def markdown_table_cells(line: str) -> list[str] | None:
 def extract_markdown_table(
     lines: list[str], expected_headers: tuple[str, ...], context: str
 ) -> list[str]:
-    """Extract one visible Markdown table by exact header, excluding comments/fences."""
+    """Extract one visible Markdown table by exact header and validate every row width."""
     visible = visible_nonfenced_lines(lines)
     expected = list(expected_headers)
     for i, line in enumerate(visible):
@@ -176,8 +176,14 @@ def extract_markdown_table(
             die(f"{context} table has an invalid separator row")
         table = [line, visible[i + 1]]
         for row in visible[i + 2 :]:
-            if markdown_table_cells(row) is None:
+            row_cells = markdown_table_cells(row)
+            if row_cells is None:
                 break
+            if len(row_cells) != len(expected):
+                die(
+                    f"{context} table row has {len(row_cells)} column(s); "
+                    f"expected {len(expected)}: {row.strip()}"
+                )
             table.append(row)
         return table
     die(f"{context} is missing the expected Markdown table")
@@ -204,9 +210,8 @@ def is_structural_only_line(line: str) -> bool:
 
 
 def section_has_content(lines: list[str]) -> bool:
-    """Require record-specific visible content, not prompts or Markdown scaffolding."""
-    content = strip_html_comments("\n".join(lines))
-    for raw in content.splitlines():
+    """Require record-specific rendered content, not prompts/scaffolding/examples."""
+    for raw in visible_nonfenced_lines(lines):
         line = raw.strip()
         if not line:
             continue
@@ -233,13 +238,14 @@ def require_prefixed_fields(
     section: str,
     rejected_values: dict[str, str] | None = None,
 ) -> None:
-    """Require exactly one selected non-empty '- Field:' row for every declared field."""
+    """Require one visible selected non-empty '- Field:' row for every field."""
+    visible = visible_nonfenced_lines(lines)
     for field in fields:
         prefix = f"- {field}:"
-        matches = [line for line in lines if line.startswith(prefix)]
+        matches = [line for line in visible if line.startswith(prefix)]
         if len(matches) != 1:
             die(
-                f"{path.relative_to(ROOT)} must contain exactly one field "
+                f"{path.relative_to(ROOT)} must contain exactly one visible field "
                 f"'{prefix}' in {section}"
             )
         value = matches[0][len(prefix) :].strip()
