@@ -33,6 +33,10 @@ The point of this repository is simple: when a future project needs to go faster
 | [OPT-CRIT-001](optimizations/OPT-CRIT-001-critical-path-prioritization.md) | Critical-path prioritization | **Proposed / OPT synthesis** | Do critical work now, speculate carefully, defer non-critical work |
 | [OPT-BUDGET-001](optimizations/OPT-BUDGET-001-performance-regression-budgets.md) | Performance regression budgets | **Proposed / OPT synthesis** | Turn performance expectations into environment-scoped regression contracts |
 | [OPT-PRUNE-001](optimizations/OPT-PRUNE-001-bound-driven-search-space-pruning.md) | Bound-driven search-space pruning | **Proposed / OPT synthesis** | Prove whole search regions cannot improve the incumbent and skip them |
+| [OPT-SIMD-001](optimizations/OPT-SIMD-001-evidence-gated-native-autovectorization.md) | Evidence-gated native autovectorization | **Verified, environment-specific** | Reshape a hot batch for vector codegen, prove parity, inspect instructions, then require measured native benefit |
+| [OPT-SOA-001](optimizations/OPT-SOA-001-worker-local-soa-tiling.md) | Worker-local SoA tiling | **Implemented external reference** | Keep only hot fields in bounded per-worker SoA tiles and reuse cache-local scratch |
+| [OPT-POOL-001](optimizations/OPT-POOL-001-persistent-topology-aware-worker-pools.md) | Persistent topology-aware worker pools | **Implemented external reference** | Reuse workers/buffers across dispatches and choose physical/logical topology explicitly |
+| [OPT-AUTO-001](optimizations/OPT-AUTO-001-calibrated-host-aware-path-promotion.md) | Calibrated host-aware path promotion | **Implemented external reference** | Calibrate equivalent paths on the live host/workload, include lifecycle costs, and promote only with margin + oracle parity |
 
 See [CATALOG.md](CATALOG.md) for the decision map and [README4AI.md](README4AI.md) for machine-oriented usage.
 
@@ -53,6 +57,7 @@ where `d` is the objective direction/order; the remaining components are search 
 - [`sources/OPTIMIZATION-LIBRARIES.md`](sources/OPTIMIZATION-LIBRARIES.md) — BayesianOptimization, Hyperopt and NLopt mechanism/taxonomy notes.
 - [`sources/WPO.md`](sources/WPO.md) — critical-path and performance-budget discovery source.
 - [`sources/MATHEMATICAL-OPTIMIZATION.md`](sources/MATHEMATICAL-OPTIMIZATION.md) — mathematical/combinatorial problem vocabulary and pruning foundations.
+- [`sources/GALAXY-CPU.md`](sources/GALAXY-CPU.md) — merged GALAXY CPU optimization phases covering SIMD/autovectorization, worker-local SoA tiling, persistent topology-aware pools and calibrated host-aware path promotion.
 - [`power_module.md`](power_module.md) — E8/qutrit DSP architecture that motivated **OPT-DSP-001**.
 - [`sources/SUXEN.md`](sources/SUXEN.md) — provenance and the required bounded recursive inventory procedure for the opaque `suxen.zip` source candidate.
 - [`scripts/inventory_zip.py`](scripts/inventory_zip.py) — bounded recursive ZIP inventory entry point; use the explicit limits documented in `sources/SUXEN.md` rather than generic/unbounded extraction.
