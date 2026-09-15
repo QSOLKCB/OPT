@@ -20,6 +20,10 @@
 | Non-critical work delays the dependency chain users actually wait on | [OPT-CRIT-001](optimizations/OPT-CRIT-001-critical-path-prioritization.md) | Prioritize the critical path; speculate/defer deliberately |
 | Small performance regressions accumulate unnoticed | [OPT-BUDGET-001](optimizations/OPT-BUDGET-001-performance-regression-budgets.md) | Guard stable performance expectations in CI |
 | Discrete search space is huge but optimistic bounds are available | [OPT-PRUNE-001](optimizations/OPT-PRUNE-001-bound-driven-search-space-pruning.md) | Prune regions that provably cannot beat the incumbent |
+| A deterministic hot loop is not exploiting useful host vector instructions | [OPT-SIMD-001](optimizations/OPT-SIMD-001-evidence-gated-native-autovectorization.md) | Reshape for autovectorization, prove parity, inspect codegen, then measure native benefit |
+| Large AoS traversal wastes cache/memory and only a bounded hot subset is needed at once | [OPT-SOA-001](optimizations/OPT-SOA-001-worker-local-soa-tiling.md) | Transform bounded per-worker tiles into SoA and reuse cache-local scratch |
+| Repeated parallel runs keep paying thread/buffer startup or misuse SMT topology | [OPT-POOL-001](optimizations/OPT-POOL-001-persistent-topology-aware-worker-pools.md) | Persist workers/buffers and choose physical/logical worker policy explicitly |
+| Several exact execution paths trade places across hosts or workload shapes | [OPT-AUTO-001](optimizations/OPT-AUTO-001-calibrated-host-aware-path-promotion.md) | Calibrate bounded candidates, include lifecycle cost, require margin and fail-closed oracle parity |
 
 Before selecting a record, define the target problem using [`OPTIMIZATION-PROBLEM.md`](OPTIMIZATION-PROBLEM.md).
 
@@ -92,6 +96,18 @@ Protect a stable benchmark expectation with an environment-scoped, variance-awar
 ### OPT-PRUNE-001 — Bound-driven search-space pruning
 Maintain a feasible incumbent, derive optimistic bounds for subregions, and discard regions that provably cannot improve the incumbent.
 
+### OPT-SIMD-001 — Evidence-gated native autovectorization
+Expose independent batch lanes to the compiler, compare portable/native builds from identical source, prove exact parity and inspect emitted instructions before integrating a measured specialized path.
+
+### OPT-SOA-001 — Worker-local SoA tiling
+Transform only bounded worker-local chunks of a large AoS population into hot-field SoA tiles, reuse local scratch, and retain deterministic reference/reduction semantics.
+
+### OPT-POOL-001 — Persistent topology-aware worker pools
+Create workers and local buffers once for repeated dispatches, expose physical/logical worker policy explicitly, and account for lifecycle amortization rather than timing only the steady-state kernel.
+
+### OPT-AUTO-001 — Calibrated host-aware path promotion
+Choose among already-correct execution paths using workload-shaped live calibration, lifecycle-aware scoring, a material promotion margin and full-work fail-closed oracle verification.
+
 ## Composition guidance
 
 Optimizations compose only when their semantic and resource models compose.
@@ -103,6 +119,9 @@ Optimizations compose only when their semantic and resource models compose.
 - approximation must never leak into an API whose callers still assume exact semantics;
 - adaptive search can lose information efficiency when parallel batches are too wide;
 - performance budgets require controlled environments or statistically defensible noise handling;
-- pruning is valid only when the bound is sound.
+- pruning is valid only when the bound is sound;
+- SIMD and thread-level parallelism can move the bottleneck to memory bandwidth or CPU frequency limits;
+- SoA tiling and persistent pools multiply worker-local storage by worker count, so cache/RSS behavior must be re-measured together;
+- host-auto selection must calibrate only candidates that already satisfy their own correctness contracts and must not convert a selector heuristic into a universal hardware ranking.
 
 Prefer one measured bottleneck removal at a time, then re-profile and reconsider the problem contract.
