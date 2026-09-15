@@ -44,11 +44,11 @@ CLASSIFICATION_TEMPLATE_VALUES = {
     "Variables": "continuous / integer / categorical / conditional / mixed",
     "Search scope": "local / global",
     "Objective behavior": "deterministic / noisy / stochastic",
-    "Information": "gradient / derivative-free / black-box",
+    "Information": "gradient available / derivative-free / black-box",
     "Evaluation cost": "cheap / moderate / expensive",
     "Constraints": "bounds / equality / inequality / semantic / resource",
     "Parallelism": "sequential / synchronous batch / asynchronous",
-    "Exactness": "exact / approximation permitted under explicit error contract",
+    "Exactness": "exact / approximation permitted under an explicit error contract",
 }
 ALLOWED_V2_STATUS_CATEGORIES = {
     "Verified",
@@ -86,6 +86,17 @@ OPT_TOKEN_RE = re.compile(r"\bOPT-[A-Z]+-\d{3}\b")
 EMPTY_LABEL_RE = re.compile(r"^-\s+[^:]+:\s*$")
 LINK_REFERENCE_DEFINITION_RE = re.compile(
     r"^\[(?:\\.|[^\[\]\\])+\]:[ \t]+\S.*$"
+)
+LINK_REFERENCE_TITLE_CONTINUATION_RE = re.compile(
+    r"^ {0,3}(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))[ \t]*$"
+)
+SOURCE_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+SOURCE_DOI_RE = re.compile(r"\b(?:doi:\s*)?10\.\d{4,9}/\S+", re.IGNORECASE)
+SOURCE_COMMIT_RE = re.compile(r"\b[0-9a-f]{7,40}\b", re.IGNORECASE)
+SOURCE_LOCAL_NOTE_RE = re.compile(r"`?(sources/[A-Za-z0-9._/-]+\.md)`?")
+SOURCE_REPOSITORY_RE = re.compile(r"`[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+`")
+SOURCE_PLACEHOLDER_RE = re.compile(
+    r"^(?:[-*+]\s*)?(?:unknown|tbd|todo|n/?a|none|pending)\.?$", re.IGNORECASE
 )
 REFERENCE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[[^\]]*\]")
 REFERENCE_LINK_RE = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
@@ -281,15 +292,31 @@ def visible_text(text: str) -> str:
     return "\n".join(visible_nonfenced_lines(markdown_source_lines(text)))
 
 
-def is_setext_section_boundary(lines: list[str], index: int) -> bool:
-    """Recognize a visible Setext H1/H2 beginning at lines[index]."""
-    if index + 1 >= len(lines):
-        return False
-    candidate = lines[index]
-    if not candidate.strip() or HEADING_RE.match(candidate):
-        return False
-    underline = lines[index + 1]
-    return bool(SETEXT_H1_RE.fullmatch(underline) or SETEXT_H2_RE.fullmatch(underline))
+def setext_heading_start(
+    lines: list[str], underline_index: int, minimum_index: int
+) -> int | None:
+    """Return the first source line of a Setext heading paragraph."""
+    if underline_index <= minimum_index:
+        return None
+    underline = lines[underline_index]
+    if not (
+        SETEXT_H1_RE.fullmatch(underline) or SETEXT_H2_RE.fullmatch(underline)
+    ):
+        return None
+
+    candidate = underline_index - 1
+    if candidate < minimum_index or not lines[candidate].strip():
+        return None
+    if HEADING_RE.match(lines[candidate]):
+        return None
+
+    start = candidate
+    while start > minimum_index:
+        previous = lines[start - 1]
+        if not previous.strip() or SECTION_BOUNDARY_RE.match(previous):
+            break
+        start -= 1
+    return start
 
 
 def section_lines(text: str, heading: str) -> list[str]:
@@ -301,8 +328,12 @@ def section_lines(text: str, heading: str) -> list[str]:
         return []
     end = len(lines)
     for i in range(start, len(lines)):
-        if SECTION_BOUNDARY_RE.match(lines[i]) or is_setext_section_boundary(lines, i):
+        if SECTION_BOUNDARY_RE.match(lines[i]):
             end = i
+            break
+        setext_start = setext_heading_start(lines, i, start)
+        if setext_start is not None:
+            end = setext_start
             break
     return lines[start:end]
 
@@ -622,6 +653,21 @@ def has_substantive_rendered_text(value: str) -> bool:
     return any(ch.isalnum() for ch in rendered_inline_text(value))
 
 
+def reference_definition_hidden_indexes(lines: list[str]) -> set[int]:
+    """Return lines consumed by non-rendering reference definitions/titles."""
+    hidden: set[int] = set()
+    for i, raw in enumerate(lines):
+        if not LINK_REFERENCE_DEFINITION_RE.fullmatch(raw.strip()):
+            continue
+        hidden.add(i)
+        if (
+            i + 1 < len(lines)
+            and LINK_REFERENCE_TITLE_CONTINUATION_RE.fullmatch(lines[i + 1])
+        ):
+            hidden.add(i + 1)
+    return hidden
+
+
 def is_structural_only_line(line: str) -> bool:
     if HEADING_RE.match(line) or THEMATIC_BREAK_RE.fullmatch(line):
         return True
@@ -634,7 +680,11 @@ def is_structural_only_line(line: str) -> bool:
 
 
 def section_has_content(lines: list[str]) -> bool:
-    for raw in visible_nonfenced_lines(lines):
+    visible = visible_nonfenced_lines(lines)
+    hidden_reference_lines = reference_definition_hidden_indexes(visible)
+    for index, raw in enumerate(visible):
+        if index in hidden_reference_lines:
+            continue
         line = raw.strip()
         if not line or line in TEMPLATE_PLACEHOLDER_LINES:
             continue
@@ -643,6 +693,22 @@ def section_has_content(lines: list[str]) -> bool:
         if not has_substantive_rendered_text(line):
             continue
         return True
+    return False
+
+
+def source_section_has_identity(lines: list[str]) -> bool:
+    """Require at least one concrete, non-placeholder provenance identity."""
+    for raw in visible_nonfenced_lines(lines):
+        line = raw.strip()
+        if not line or SOURCE_PLACEHOLDER_RE.fullmatch(line):
+            continue
+        if SOURCE_URL_RE.search(line) or SOURCE_DOI_RE.search(line) or SOURCE_COMMIT_RE.search(line):
+            return True
+        for match in SOURCE_LOCAL_NOTE_RE.finditer(line):
+            if (ROOT / match.group(1)).is_file():
+                return True
+        if SOURCE_REPOSITORY_RE.search(line):
+            return True
     return False
 
 
@@ -688,7 +754,7 @@ def require_prefixed_fields(
 
 records: dict[str, Path] = {}
 status_categories: dict[str, str] = {}
-for path in sorted(OPT_DIR.glob("OPT-*.md")):
+for path in sorted(OPT_DIR.glob("*.md")):
     text = path.read_text(encoding="utf-8")
     lines = visible_nonfenced_lines(markdown_source_lines(text))
     first = lines[0] if lines else ""
@@ -699,7 +765,10 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
 
     filename_match = FILENAME_ID_RE.match(path.name)
     if not filename_match:
-        die(f"record filename does not begin with an OPT ID: {path.relative_to(ROOT)}")
+        die(
+            f"record Markdown filename does not follow OPT-<KIND>-<NNN>-... convention: "
+            f"{path.relative_to(ROOT)}"
+        )
     if filename_match.group(1) != record_id:
         die(
             f"record ID mismatch: {path.relative_to(ROOT)} declares {record_id} "
@@ -736,6 +805,13 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
             die(
                 f"{path.relative_to(ROOT)} has empty/template/structural/markup-only mandatory section {heading}"
             )
+
+    source_evidence = section_lines(text, "## Source evidence")
+    if not source_section_has_identity(source_evidence):
+        die(
+            f"{path.relative_to(ROOT)} ## Source evidence lacks a concrete source identity "
+            "(URL, DOI, pinned commit, existing sources/*.md note, or repository identity)"
+        )
 
     contract = section_lines(text, "## Optimization problem contract")
     require_prefixed_fields(
@@ -887,5 +963,43 @@ if "P = (X, F, f, d, C, B, S)" not in canonical_text:
 for field, pattern in CANONICAL_DEFINITION_PATTERNS.items():
     if not any(pattern.match(line) for line in canonical):
         die(f"OPTIMIZATION-PROBLEM.md is missing visible canonical definition for {field}")
+
+classification_lines = section_lines(problem_text, "## Required classification")
+if not classification_lines:
+    die("OPTIMIZATION-PROBLEM.md is missing visible ## Required classification")
+classification_rows = extract_markdown_table(
+    classification_lines,
+    ("Dimension", "Typical values"),
+    "OPTIMIZATION-PROBLEM.md ## Required classification",
+)
+canonical_classification: dict[str, str] = {}
+for row in classification_rows:
+    dimension, typical_values = row
+    if dimension in canonical_classification:
+        die(f"OPTIMIZATION-PROBLEM.md has duplicate classification dimension {dimension}")
+    canonical_classification[dimension] = typical_values
+
+expected_dimensions = set(REQUIRED_CLASSIFICATION_FIELDS)
+observed_dimensions = set(canonical_classification)
+if observed_dimensions != expected_dimensions:
+    missing_dimensions = sorted(expected_dimensions - observed_dimensions)
+    unknown_dimensions = sorted(observed_dimensions - expected_dimensions)
+    details: list[str] = []
+    if missing_dimensions:
+        details.append(f"missing={','.join(missing_dimensions)}")
+    if unknown_dimensions:
+        details.append(f"unknown={','.join(unknown_dimensions)}")
+    die(
+        "OPTIMIZATION-PROBLEM.md classification dimensions do not match the checker: "
+        + "; ".join(details)
+    )
+for dimension in REQUIRED_CLASSIFICATION_FIELDS:
+    canonical_value = canonical_classification[dimension]
+    checker_value = CLASSIFICATION_TEMPLATE_VALUES[dimension]
+    if canonical_value != checker_value:
+        die(
+            f"classification placeholder drift for {dimension}: "
+            f"canonical='{canonical_value}' checker='{checker_value}'"
+        )
 
 print(f"CATALOG_INTEGRITY_OK records={len(records)} frozen_v1={len(FROZEN_V1)}")
