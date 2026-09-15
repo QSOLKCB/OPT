@@ -207,7 +207,8 @@ def raw_html_block_start(raw: str) -> tuple[str, str | None] | None:
 
 
 def raw_html_tag_closes(raw: str, tag: str) -> bool:
-    return re.search(rf"</{re.escape(tag)}[ \t]*>", raw, re.IGNORECASE) is not None
+    """Match CommonMark type-1 block terminators exactly (case-insensitive)."""
+    return re.search(rf"</{re.escape(tag)}>", raw, re.IGNORECASE) is not None
 
 
 def visible_nonfenced_lines(lines: list[str]) -> list[str]:
@@ -698,6 +699,7 @@ def section_has_content(lines: list[str]) -> bool:
 
 def source_section_has_identity(lines: list[str]) -> bool:
     """Require at least one concrete, non-placeholder provenance identity."""
+    sources_root = (ROOT / "sources").resolve()
     for raw in visible_nonfenced_lines(lines):
         line = raw.strip()
         if not line or SOURCE_PLACEHOLDER_RE.fullmatch(line):
@@ -705,7 +707,12 @@ def source_section_has_identity(lines: list[str]) -> bool:
         if SOURCE_URL_RE.search(line) or SOURCE_DOI_RE.search(line) or SOURCE_COMMIT_RE.search(line):
             return True
         for match in SOURCE_LOCAL_NOTE_RE.finditer(line):
-            if (ROOT / match.group(1)).is_file():
+            candidate = (ROOT / match.group(1)).resolve()
+            try:
+                candidate.relative_to(sources_root)
+            except ValueError:
+                continue
+            if candidate.is_file():
                 return True
         if SOURCE_REPOSITORY_RE.search(line):
             return True
