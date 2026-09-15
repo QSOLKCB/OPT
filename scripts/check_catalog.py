@@ -42,6 +42,12 @@ LINK_RE = re.compile(r"\[([^\]]+)\]\((optimizations/[^)#]+\.md)\)")
 ID_RE = re.compile(r"^# (OPT-[A-Z]+-\d{3}) — ")
 FILENAME_ID_RE = re.compile(r"^(OPT-[A-Z]+-\d{3})-")
 STATUS_RE = re.compile(r"^\*\*Status:\*\*\s*(.*?)\s*$")
+OPT_TOKEN_RE = re.compile(r"\bOPT-[A-Z]+-\d{3}\b")
+README_ROW_RE = re.compile(
+    r"^\|\s*\[(OPT-[A-Z]+-\d{3})\]\((optimizations/[^)#]+\.md)\)"
+    r"\s*\|[^|]*\|\s*([^|]+?)\s*\|",
+    re.MULTILINE,
+)
 
 
 def die(msg: str) -> None:
@@ -63,7 +69,21 @@ def section_lines(text: str, heading: str) -> list[str]:
     return lines[start:end]
 
 
+def section_has_content(lines: list[str]) -> bool:
+    """Require visible non-whitespace content, ignoring HTML comments."""
+    content = "\n".join(lines)
+    content = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
+    return bool(content.strip())
+
+
+def normalized_status_category(raw: str) -> str:
+    """Normalize light Markdown emphasis, then return the category before ';'."""
+    plain = re.sub(r"[*_`]", "", raw).strip()
+    return plain.split(";", 1)[0].strip()
+
+
 records: dict[str, Path] = {}
+status_categories: dict[str, str] = {}
 for path in sorted(OPT_DIR.glob("OPT-*.md")):
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -101,11 +121,16 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
                 f"{path.relative_to(ROOT)} uses undefined status category "
                 f"'{status_category}'"
             )
+        status_categories[record_id] = status_category
 
         headings = {line for line in lines if line.startswith("## ")}
         missing = sorted(REQUIRED_V2 - headings)
         if missing:
             die(f"{path.relative_to(ROOT)} missing sections: {', '.join(missing)}")
+
+        for heading in sorted(REQUIRED_V2):
+            if not section_has_content(section_lines(text, heading)):
+                die(f"{path.relative_to(ROOT)} has empty mandatory section {heading}")
 
         contract = section_lines(text, "## Optimization problem contract")
         for field in REQUIRED_CONTRACT_FIELDS:
@@ -155,9 +180,31 @@ for doc_name in ("README.md", "CATALOG.md"):
         if missing_readme:
             die(f"README.md is missing record(s): {', '.join(missing_readme)}")
 
+        row_statuses: dict[str, str] = {}
+        for row_id, rel, raw_status in README_ROW_RE.findall(text):
+            if record_paths.get(rel) != row_id:
+                die(f"README.md row identity mismatch for {row_id}: {rel}")
+            if row_id in row_statuses:
+                die(f"README.md has duplicate status row for {row_id}")
+            row_statuses[row_id] = normalized_status_category(raw_status)
+
+        for record_id, expected_status in status_categories.items():
+            observed_status = row_statuses.get(record_id)
+            if observed_status is None:
+                die(f"README.md has no catalog status cell for post-v1 record {record_id}")
+            if observed_status != expected_status:
+                die(
+                    f"README.md status mismatch for {record_id}: "
+                    f"record='{expected_status}' README='{observed_status}'"
+                )
+
 catalog = (ROOT / "CATALOG.md").read_text(encoding="utf-8")
+catalog_ids = set(OPT_TOKEN_RE.findall(catalog))
+unknown_catalog_ids = sorted(catalog_ids - records.keys())
+if unknown_catalog_ids:
+    die(f"CATALOG.md references unknown record ID(s): {', '.join(unknown_catalog_ids)}")
 for record_id, path in records.items():
-    if record_id not in catalog:
+    if record_id not in catalog_ids:
         die(f"{record_id} ({path.name}) is not mentioned in CATALOG.md")
 
 problem_contract = ROOT / "OPTIMIZATION-PROBLEM.md"

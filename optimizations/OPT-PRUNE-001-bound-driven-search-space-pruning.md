@@ -17,26 +17,26 @@ A discrete or mixed search space is too large for exhaustive evaluation, but who
 
 - X: the target's explicitly defined discrete or mixed candidate space together with a partition of unexplored candidates into searchable subregions
 - F: candidates in X satisfying every original hard constraint; relaxed/bounding solutions are not feasible final answers unless they also lie in F
-- f: the target objective evaluated on feasible candidates only
-- d: the target's predeclared minimize or maximize direction, or an explicit total/partial ordering that defines when one incumbent improves another
-- C: the returned incumbent satisfies the original feasibility/semantic contract, and every pruning decision is justified by a separately defined sound region-bound function b
-- B: for exact search, resources required until the search frontier is exhausted or optimality is proven; for anytime search, an explicit target-specific evaluation/time/compute budget
-- S: exact mode stops only when optimality is proven or the frontier is exhausted; anytime mode stops on B and reports the incumbent plus the remaining optimality gap/bound
+- f: a scalar real-valued target objective `f : F → R` evaluated on feasible candidates only
+- d: exactly one of scalar `minimize` or scalar `maximize`; vector, Pareto, lexicographic, or other partial-order objectives are outside this record unless a separately specified and validated frontier-bound mechanism is introduced
+- C: the returned incumbent satisfies the original feasibility/semantic contract, and every pruning decision is justified by a separately defined sound scalar region-bound function `b`
+- B: a finite, predeclared target-specific cap on evaluations, wall time, compute, or equivalent resource consumption; exact-mode search may prove optimality before this cap but may not run without a finite cap
+- S: stop immediately when optimality is proven or the frontier is exhausted; otherwise stop when B is exhausted and return the best validated incumbent plus the remaining valid bound/optimality gap without claiming exact completion
 
 For each unexplored region `R`, define a bound `b(R)` separately from `f`:
 
 - minimizing: `b(R) ≤ inf { f(x) | x ∈ F ∩ R }`; prune `R` only when `b(R) ≥ f(x_incumbent)`;
 - maximizing: `b(R) ≥ sup { f(x) | x ∈ F ∩ R }`; prune `R` only when `b(R) ≤ f(x_incumbent)`.
 
-An independently proven infeasible region may also be pruned. A heuristic estimate that does not satisfy the declared bound relation is search-ordering evidence at most, not a pruning proof.
+An independently proven infeasible region may also be pruned. A heuristic estimate that does not satisfy the declared bound relation is search-ordering evidence at most, not a pruning proof. This record does not authorize scalar bounds to prune vector/Pareto or partially ordered objectives.
 
 ## Preserved contract
 
-A region may be discarded only when its bound proves it cannot improve the incumbent under the declared objective and constraints. Heuristic guesses are not proof-based pruning.
+A region may be discarded only when its scalar bound proves it cannot improve the incumbent under the declared scalar objective and constraints. Heuristic guesses are not proof-based pruning, and exhausting B without an optimality proof does not permit an exactness claim.
 
 ## Optimization
 
-Maintain an incumbent, partition the search space, compute a cheap sound `b(R)` for each region (often from a relaxation), prioritize promising regions, and prune only when the direction-specific bound relation proves the region cannot improve the incumbent.
+Maintain an incumbent, partition the search space, compute a cheap sound `b(R)` for each region (often from a relaxation), prioritize promising regions, and prune only when the direction-specific scalar bound relation proves the region cannot improve the incumbent.
 
 A relaxed solution is evidence for a bound, not automatically a feasible final answer.
 
@@ -50,16 +50,16 @@ A relaxed solution is evidence for a bound, not automatically a feasible final a
 
 ## Validation
 
-For small fixtures, compare with exhaustive enumeration. Test `b(R)` soundness independently by checking the direction-specific inequality against exhaustive feasible values inside each test region. Test pruning separately from search ordering, and record the optimality gap when stopping before exact completion.
+For small fixtures, compare with exhaustive enumeration. Test `b(R)` soundness independently by checking the direction-specific inequality against exhaustive feasible values inside each test region. Test pruning separately from search ordering. Verify that budget exhaustion returns an anytime result without an exactness claim, and record the remaining valid optimality gap/bound whenever exact completion was not proven.
 
 ## Target-repo adaptation
 
-The quality/cost of bounds determines whether pruning helps. Develop target-specific relaxations and branch ordering; do not assume one bound is universally strong.
+The quality/cost of bounds determines whether pruning helps. Develop target-specific scalar relaxations, branch ordering, and a finite resource cap before execution; do not assume one bound or budget is universally appropriate.
 
 ## Failure modes
 
-Unsound bounds can remove the true optimum; weak bounds provide little pruning; expensive bounds can cost more than evaluation; numeric tolerance errors can create incorrect pruning; heuristic scores mislabeled as bounds invalidate the proof obligation.
+Unsound bounds can remove the true optimum; weak bounds provide little pruning; expensive bounds can cost more than evaluation; numeric tolerance errors can create incorrect pruning; heuristic scores mislabeled as bounds invalidate the proof obligation; applying scalar pruning logic to vector/Pareto objectives can discard nondominated candidates; an unbounded exact-search policy can consume resources indefinitely.
 
 ## Rollback trigger
 
-Disable any pruning rule that fails exhaustive small-case validation, violates the declared bound relation, or whose bound cost exceeds the work it eliminates.
+Disable any pruning rule that fails exhaustive small-case validation, violates the declared scalar bound relation, is applied to an unsupported objective ordering, or whose bound cost exceeds the work it eliminates. Abort exact-mode claims whenever B is exhausted before optimality is proven.
