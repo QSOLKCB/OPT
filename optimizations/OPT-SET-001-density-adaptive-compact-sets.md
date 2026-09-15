@@ -15,9 +15,13 @@ A single representation performs poorly across regions with very different densi
 
 ## Optimization problem contract
 
-- Variables: partition width, sparse/dense representation threshold, serialization layout
-- Objectives: memory footprint and set-operation latency
-- Hard constraint: exact set semantics unless approximation is explicitly introduced elsewhere
+- X: target-supported partition widths, sparse/dense container choices, switching thresholds, and serialization layouts
+- F: representations that preserve exact membership and set-operation semantics and satisfy target memory/serialization compatibility constraints
+- f: measured memory footprint plus target-relevant set-operation and serialization latency
+- d: minimize under the target's predeclared scalar, lexicographic, or Pareto ordering
+- C: membership, union, intersection, difference, and persistence round trips match the canonical reference set exactly
+- B: target-specific benchmark budget over declared sparse, dense, mixed, and transition-boundary datasets; no portable trial count is supplied here
+- S: stop when the declared budget is exhausted or a validated representation meets the target objective without violating C
 
 ## Preserved contract
 

@@ -14,9 +14,13 @@ The same deterministic transformation is repeated independently for each consume
 
 ## Optimization problem contract
 
-- Variables: materialization boundary, representation format, persistence policy
-- Objectives: transformation CPU, replay CPU, fan-out latency
-- Hard constraint: materialized form must satisfy the consumer contract and versioning/trust requirements
+- X: target-supported materialization boundaries, representation formats/versions, persistence policies, and raw-versus-materialized retention policies
+- F: configurations whose materialized representation satisfies every declared consumer semantic, versioning, integrity, and trust requirement
+- f: measured transformation CPU, replay CPU, fan-out latency, and storage/I/O overhead under the target's declared objective ordering
+- d: minimize under the target's predeclared scalar or lexicographic ordering
+- C: consumers receive the declared representation semantics exactly; verification/security metadata may be removed only under an explicit contract change
+- B: target-specific fan-out/replay benchmark budget declared before tuning; no portable subscriber count, replay size, or retention duration is supplied here
+- S: stop when the declared budget is exhausted or a validated materialization policy materially improves the target objective without violating C
 
 ## Preserved contract
 

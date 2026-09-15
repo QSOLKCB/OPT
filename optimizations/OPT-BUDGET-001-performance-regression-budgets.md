@@ -15,10 +15,13 @@ Small performance regressions accumulate because performance is measured occasio
 
 ## Optimization problem contract
 
-- Metric: explicitly named latency/throughput/memory/I/O quantity
-- Fixture/environment: pinned or sufficiently characterized
-- Baseline distribution: repeated observations
-- Budget: warning/hard boundary with justified statistical tolerance
+- X: target-supported metric/fixture/statistic/threshold configurations for a performance-regression gate
+- F: gate configurations based on a sufficiently characterized environment and workload, with statistically justified tolerance and no weakening of functional correctness or workload realism
+- f: target-measured regression-detection quality together with CI noise/false-alarm rate and measurement overhead
+- d: minimize missed material regressions and flaky/false failures under the target's predeclared multi-objective ordering
+- C: the performance gate must not incentivize weakening tests, assertions, evidence, semantic coverage, or representative workload inputs
+- B: target-specific calibration budget specifying repetitions, environment samples, and allowable CI/runtime measurement cost
+- S: stop calibration when the declared sample budget is exhausted or the baseline/noise estimate is stable enough to justify the predeclared warning and hard thresholds
 
 ## Preserved contract
 

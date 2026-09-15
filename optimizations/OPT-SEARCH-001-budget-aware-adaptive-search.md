@@ -16,7 +16,13 @@ Optimization knobs are selected by folklore, exhaustive sweeps, or a few arbitra
 
 ## Optimization problem contract
 
-Define `P = (X,F,f,d,C,B,S)` from `OPTIMIZATION-PROBLEM.md`. Explicitly classify continuous/discrete/conditional variables, noise, constraints, gradient availability, local/global scope and evaluation cost.
+- X: the target's explicitly bounded continuous, integer, categorical, conditional, or mixed parameter search space
+- F: candidates in X that satisfy all hard resource, platform, semantic, and correctness constraints before objective ranking
+- f: the target-measured objective or objective vector for each feasible candidate, including declared noise/statistical treatment
+- d: the target's predeclared minimize, maximize, lexicographic, or Pareto ordering
+- C: search may choose where to evaluate but may not weaken correctness, determinism, evidence, API, trust, or other target semantics to improve f
+- B: an explicit target-specific maximum evaluation, wall-time, compute, monetary, or equivalent resource budget declared before the search starts
+- S: stop on the declared budget, a predeclared objective/quality target, or a predeclared stagnation/convergence rule; preserve the reason for stopping in the trial ledger
 
 ## Preserved contract
 

@@ -14,10 +14,13 @@ Expensive work is rerun even though every input capable of affecting its result 
 
 ## Optimization problem contract
 
-- Variables: signature definition, persistence scope, invalidation granularity
-- Objective: minimize repeated work and metadata I/O
-- Hard constraint: a reused result must correspond to the complete effective input identity
-- Budget/stopping: target-specific
+- X: target-supported signature definitions, persistence scopes, invalidation granularities, and missing-output policies
+- F: configurations whose signature covers every output-affecting input, whose reuse checks required outputs, and whose failed executions never commit new reusable state
+- f: measured repeated-work cost including stage runtime plus signature/metadata I/O overhead
+- d: minimize
+- C: every reused output is semantically equivalent to a fresh execution for the same effective inputs, with the same failure/output-validity semantics
+- B: target-specific benchmark/evaluation budget declared before tuning; no portable value is supplied by this record
+- S: stop when the declared budget is exhausted or a validated configuration meets the predeclared improvement threshold without violating C
 
 ## Preserved contract
 

@@ -14,9 +14,13 @@ Many callers request the same expensive computation concurrently before any call
 
 ## Optimization problem contract
 
-- Key: canonical identity of equivalent in-flight requests
-- Objective: minimize duplicate concurrent evaluations
-- Hard constraint: all joined callers must receive a result/error valid for their request semantics
+- X: target-supported request-key canonicalizations, in-flight ownership policies, waiter limits, cancellation policies, and retry/error-sharing policies
+- F: policies that coalesce only semantically equivalent requests and preserve authorization, timeout, cancellation, result, and error semantics for every joined caller
+- f: measured duplicate upstream evaluations and end-to-end/tail latency, including coalescer synchronization and waiter-memory overhead
+- d: minimize under the target's predeclared scalar or lexicographic ordering
+- C: every joined caller receives a result or error valid for its original request semantics; non-equivalent requests are never merged
+- B: target-specific concurrent-load test budget declared before tuning; no portable request count or duration is supplied by this record
+- S: stop when the declared load-test budget is exhausted or further policy changes fail to produce a validated material improvement without violating C
 
 ## Preserved contract
 

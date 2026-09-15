@@ -15,9 +15,13 @@ Exact processing has unbounded or unacceptable cost even though the product/scie
 
 ## Optimization problem contract
 
-- Objective: reduce bounded resource/latency cost
-- Constraint: declared error/degradation metric remains within `ε` or another explicit envelope
-- Reference: exact path or exact fixture remains available for conformance
+- X: target-supported approximation policies, quality/resource ceilings, sampling/culling/LOD policies, update frequencies, and exact-mode fallback choices
+- F: policies whose declared error/degradation metric remains within the target's explicit envelope and whose resource/semantic constraints are satisfied
+- f: target-measured resource or latency cost, optionally paired with the declared quality/error metric
+- d: minimize resource/latency cost subject to feasibility in F, or use the target's predeclared multi-objective ordering when quality is ranked rather than hard-bounded
+- C: approximation is permitted only by an explicit contract; exact callers are not silently weakened, and an exact reference path or exact fixture remains available where practical
+- B: target-specific benchmark/quality-evaluation budget over predeclared ordinary, boundary, and adversarial fixtures
+- S: stop when the evaluation budget is exhausted or a validated policy meets the target resource objective while remaining inside the declared quality envelope
 
 ## Preserved contract
 

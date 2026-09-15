@@ -15,10 +15,13 @@ A discrete or mixed search space is too large for exhaustive evaluation, but who
 
 ## Optimization problem contract
 
-- Search space `X`, feasible set `F`, objective `f`
-- Incumbent: best validated feasible solution
-- Bound: optimistic objective bound for each unexplored region
-- Exactness: declare whether full branch-and-bound proof or anytime/budgeted search is required
+- X: the target's explicitly defined discrete or mixed candidate space together with a partition of unexplored candidates into searchable subregions
+- F: candidates in X satisfying every original hard constraint; relaxed/bounding solutions are not feasible final answers unless they also lie in F
+- f: the target objective evaluated on feasible candidates, plus a sound optimistic bound for each unexplored subregion
+- d: the target's predeclared minimize or maximize direction, or an explicit ordering that defines when one incumbent improves another
+- C: every pruning bound is sound for the declared objective/constraints and the returned incumbent satisfies the original feasibility and semantic contract
+- B: for exact search, resources required until the search frontier is exhausted or optimality is proven; for anytime search, an explicit target-specific evaluation/time/compute budget
+- S: exact mode stops only when optimality is proven or the frontier is exhausted; anytime mode stops on B and reports the incumbent plus the remaining optimality gap/bound
 
 ## Preserved contract
 

@@ -14,9 +14,13 @@ An expensive operation is applied to a large population even though only a small
 
 ## Optimization problem contract
 
-- Variable: where semantics-preserving filtering/culling/limiting occurs
-- Objective: minimize cardinality presented to the expensive stage
-- Hard constraint: early reduction must preserve every candidate required by the final result
+- X: semantically legal placements and implementations of filtering, culling, limiting, candidate selection, or other working-set reductions in the target pipeline
+- F: placements that preserve every candidate and ordering/tie/join semantic required by the final result and satisfy target resource constraints
+- f: measured end-to-end pipeline cost and cardinality presented to the expensive stage
+- d: minimize under the target's predeclared objective ordering
+- C: the reordered/reduced pipeline must be semantically equivalent to the reference pipeline for all declared output, ordering, top-k, tie, null, and join semantics
+- B: target-specific benchmark budget over representative and adversarial selectivity distributions; no portable selectivity threshold is supplied here
+- S: stop when the declared budget is exhausted or a validated early-reduction placement materially lowers total cost without violating C
 
 ## Preserved contract
 

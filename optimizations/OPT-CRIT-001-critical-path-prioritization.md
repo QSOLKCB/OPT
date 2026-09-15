@@ -15,9 +15,13 @@ Non-critical work competes with the dependency chain that determines user-visibl
 
 ## Optimization problem contract
 
-- Classify work: critical now / likely soon / deferrable / unnecessary
-- Objective: reduce end-to-end critical-path latency
-- Constraints: no starvation, stale-state or correctness violation from deferral/speculation
+- X: target-supported task-priority, prefetch/precompute, lazy/deferred-work, and speculation policies
+- F: policies that preserve all semantic deadlines, avoid externally visible speculative side effects before commitment, and satisfy starvation/resource constraints
+- f: measured end-to-end latency of the declared critical dependency path, including resource pressure introduced by speculation/deferment
+- d: minimize
+- C: critical outputs and semantic deadlines are preserved; speculative work is safely discardable; deferred work completes before it becomes semantically required
+- B: target-specific trace/benchmark budget covering cold/warm, hit/miss, and wrong-speculation cases; no portable prediction horizon is supplied here
+- S: stop when the declared budget is exhausted or a validated policy materially reduces critical-path latency without violating C
 
 ## Preserved contract
 

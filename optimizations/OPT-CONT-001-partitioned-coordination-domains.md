@@ -15,9 +15,13 @@ Independent workers serialize on one globally coordinated resource even though t
 
 ## Optimization problem contract
 
-- Variables: shard/domain count, namespace split, worker-to-domain mapping
-- Objective: reduce coordination contention and tail latency
-- Hard constraint: preserve the required global invariant (for example uniqueness or ordering scope)
+- X: target-supported shard/domain counts, namespace splits, worker-to-domain mappings, and merge/aggregation policies
+- F: configurations that preserve the target's required uniqueness, ownership, visibility, failure-domain, and ordering guarantees
+- f: measured coordination contention, tail latency, and coordination overhead under the declared workload
+- d: minimize under the target's predeclared objective ordering
+- C: partitioning must not silently weaken any global invariant; any intentional shift from global to per-domain ordering is a separately declared contract change
+- B: target-specific contention/scale benchmark budget declared before tuning; no portable shard count or bit split is supplied here
+- S: stop when the budget is exhausted or a validated partitioning materially reduces the target bottleneck without violating C
 
 ## Preserved contract
 

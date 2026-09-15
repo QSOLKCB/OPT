@@ -27,6 +27,7 @@ REQUIRED_V2 = {
     "## Failure modes",
     "## Rollback trigger",
 }
+REQUIRED_CONTRACT_FIELDS = ("X", "F", "f", "d", "C", "B", "S")
 LINK_RE = re.compile(r"\[[^\]]+\]\((optimizations/[^)#]+\.md)\)")
 ID_RE = re.compile(r"^# (OPT-[A-Z]+-\d{3}) — ")
 
@@ -35,10 +36,26 @@ def die(msg: str) -> None:
     raise SystemExit(f"catalog-integrity: {msg}")
 
 
+def section_lines(text: str, heading: str) -> list[str]:
+    """Return lines belonging to one exact level-2 Markdown section."""
+    lines = text.splitlines()
+    try:
+        start = lines.index(heading) + 1
+    except ValueError:
+        return []
+    end = len(lines)
+    for i in range(start, len(lines)):
+        if lines[i].startswith("## "):
+            end = i
+            break
+    return lines[start:end]
+
+
 records: dict[str, Path] = {}
 for path in sorted(OPT_DIR.glob("OPT-*.md")):
     text = path.read_text(encoding="utf-8")
-    first = text.splitlines()[0] if text else ""
+    lines = text.splitlines()
+    first = lines[0] if lines else ""
     match = ID_RE.match(first)
     if not match:
         die(f"bad record heading: {path.relative_to(ROOT)}")
@@ -48,10 +65,28 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
     records[record_id] = path
     if "**Status:**" not in text:
         die(f"missing Status in {path.relative_to(ROOT)}")
+
     if record_id not in FROZEN_V1:
-        missing = sorted(section for section in REQUIRED_V2 if section not in text)
+        headings = {line for line in lines if line.startswith("## ")}
+        missing = sorted(REQUIRED_V2 - headings)
         if missing:
             die(f"{path.relative_to(ROOT)} missing sections: {', '.join(missing)}")
+
+        contract = section_lines(text, "## Optimization problem contract")
+        for field in REQUIRED_CONTRACT_FIELDS:
+            prefix = f"- {field}:"
+            matches = [line for line in contract if line.startswith(prefix)]
+            if len(matches) != 1:
+                die(
+                    f"{path.relative_to(ROOT)} must contain exactly one contract field "
+                    f"'{prefix}' in ## Optimization problem contract"
+                )
+            if not matches[0][len(prefix) :].strip():
+                die(f"{path.relative_to(ROOT)} has empty contract field {field}")
+
+missing_frozen = sorted(FROZEN_V1 - records.keys())
+if missing_frozen:
+    die(f"frozen v1 record(s) missing: {', '.join(missing_frozen)}")
 
 # README is the human-facing record index and must contain real Markdown links.
 # CATALOG may use either links or plain/backticked record IDs; any links it does
