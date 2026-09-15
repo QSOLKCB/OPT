@@ -28,12 +28,15 @@ Define the target using `OPTIMIZATION-PROBLEM.md`. Keep these seven canonical fi
 - B:
 - S:
 
-Then record useful classification detail:
+Then record every required problem-classification dimension from `OPTIMIZATION-PROBLEM.md`:
 
 - Variables: continuous / integer / categorical / conditional / mixed
-- Objective behavior: deterministic / noisy / stochastic
 - Search scope: local / global
+- Objective behavior: deterministic / noisy / stochastic
 - Information: gradient / derivative-free / black-box
+- Evaluation cost: cheap / moderate / expensive
+- Constraints: bounds / equality / inequality / semantic / resource
+- Parallelism: sequential / synchronous batch / asynchronous
 - Exactness: exact / approximation permitted under explicit error contract
 
 ## Preserved contract

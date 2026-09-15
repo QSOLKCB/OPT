@@ -186,13 +186,12 @@ if missing_frozen:
 
 record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in records.items()}
 
-# README is the complete human-facing record index. CATALOG may use either
-# links or plain/backticked IDs, but any optimization-record link in either
-# document must use the target record's stable ID as its label.
+# Validate every optimization-record link wherever it appears. README index
+# completeness/uniqueness is checked separately from actual catalog table rows,
+# so contextual prose links are allowed and do not count as duplicate index rows.
 for doc_name in ("README.md", "CATALOG.md"):
     text = (ROOT / doc_name).read_text(encoding="utf-8")
     links = LINK_RE.findall(text)
-    linked_ids: list[str] = []
     for label, rel in links:
         target = ROOT / rel
         if not target.is_file():
@@ -205,19 +204,26 @@ for doc_name in ("README.md", "CATALOG.md"):
                 f"record link label mismatch in {doc_name}: '{label}' points to "
                 f"{target_id} ({rel})"
             )
-        linked_ids.append(target_id)
 
     if doc_name == "README.md":
-        counts = Counter(linked_ids)
-        duplicates = sorted(record_id for record_id, count in counts.items() if count != 1)
-        if duplicates:
-            die(f"README.md must index each record exactly once; bad counts for: {', '.join(duplicates)}")
+        rows = README_ROW_RE.findall(text)
+        row_ids = [row_id for row_id, _rel, _status in rows]
+        counts = Counter(row_ids)
+        bad_counts = sorted(record_id for record_id, count in counts.items() if count != 1)
+        if bad_counts:
+            die(
+                "README.md catalog table must index each record exactly once; "
+                f"bad row counts for: {', '.join(bad_counts)}"
+            )
         missing_readme = sorted(records.keys() - counts.keys())
         if missing_readme:
-            die(f"README.md is missing record(s): {', '.join(missing_readme)}")
+            die(f"README.md catalog table is missing record(s): {', '.join(missing_readme)}")
+        unknown_rows = sorted(counts.keys() - records.keys())
+        if unknown_rows:
+            die(f"README.md catalog table references unknown record(s): {', '.join(unknown_rows)}")
 
         row_statuses: dict[str, str] = {}
-        for row_id, rel, raw_status in README_ROW_RE.findall(text):
+        for row_id, rel, raw_status in rows:
             if record_paths.get(rel) != row_id:
                 die(f"README.md row identity mismatch for {row_id}: {rel}")
             if row_id in row_statuses:
