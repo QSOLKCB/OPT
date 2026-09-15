@@ -20,17 +20,19 @@ Optimization knobs are selected by folklore, exhaustive sweeps, or a few arbitra
 - F: candidates in X that satisfy all hard resource, platform, semantic, and correctness constraints before objective ranking
 - f: the target-measured objective or objective vector for each feasible candidate, including declared noise/statistical treatment
 - d: the target's predeclared minimize, maximize, lexicographic, or Pareto ordering
-- C: search may choose where to evaluate but may not weaken correctness, determinism, evidence, API, trust, or other target semantics to improve f
-- B: an explicit target-specific maximum evaluation, wall-time, compute, monetary, or equivalent resource budget declared before the search starts
-- S: stop on the declared budget, a predeclared objective/quality target, or a predeclared stagnation/convergence rule; preserve the reason for stopping in the trial ledger
+- C: search may choose where to evaluate but may not weaken correctness, determinism, evidence, API, trust, or other target semantics to improve f; asynchronous dispatch must not exceed B after accounting for already reserved/in-flight trials
+- B: an explicit target-specific maximum evaluation, wall-time, compute, monetary, or equivalent resource budget declared before the search starts; the accounting unit and failure/cancellation charging policy are fixed before dispatch begins
+- S: stop proposing/dispatching when no additional trial can be reserved within B, when a predeclared objective/quality target is met, or when a predeclared stagnation/convergence rule fires; preserve the reason for stopping in the trial ledger
 
 ## Preserved contract
 
-Search may choose *where to evaluate* but may not weaken correctness constraints to improve the objective.
+Search may choose *where to evaluate* but may not weaken correctness constraints to improve the objective. Under asynchronous execution, the declared maximum budget remains a hard dispatch bound: pending work counts according to the predeclared accounting policy rather than being ignored until completion.
 
 ## Optimization
 
 Use observations to adapt future evaluations: surrogate/acquisition search for expensive black-box objectives, conditional spaces where parameters only exist under certain choices, progressive domain contraction where justified, and explicit stopping/evaluation budgets. For asynchronous workers, reserve pending regions or otherwise diversify proposals so workers do not redundantly evaluate the same neighborhood.
+
+Before dispatching an asynchronous trial, atomically reserve that trial in the ledger and debit the applicable unit from B (evaluation count, money, compute quota, or the target's declared equivalent). If the reservation would exceed B, do not dispatch. A reserved trial remains budget-accounted while pending. The target must predeclare whether failed/cancelled trials consume the reservation permanently, partially, or are refunded; that rule is applied deterministically and recorded in the ledger. Completion converts the reservation into a completed trial without charging the same budget twice.
 
 Parallelism has an information cost: very wide batches receive less feedback between suggestions and can degenerate toward non-adaptive/random search.
 
@@ -44,16 +46,16 @@ Parallelism has an information cost: very wide batches receive less feedback bet
 
 ## Validation
 
-Keep a deterministic search seed where practical, preserve the full trial ledger, re-evaluate finalists, and validate the selected candidate against the reference contract on held-out/repeated workloads.
+Keep a deterministic search seed where practical, preserve the full trial ledger, re-evaluate finalists, and validate the selected candidate against the reference contract on held-out/repeated workloads. For asynchronous search, test the budget boundary with multiple workers contending for the last remaining reservation (for example, 99 of 100 evaluation slots already consumed/reserved) and prove that at most one additional trial can be dispatched. Inject failures and cancellations and verify the declared charge/refund policy without double-debit or budget overshoot.
 
 ## Target-repo adaptation
 
-Do not copy acquisition constants, trial counts, domain contraction rates or parallel widths. Treat them as optimizer parameters with their own evidence boundary.
+Do not copy acquisition constants, trial counts, domain contraction rates or parallel widths. Treat them as optimizer parameters with their own evidence boundary. Define the budget accounting unit, atomic reservation mechanism, and failure/cancellation charging policy for the target before enabling asynchronous dispatch.
 
 ## Failure modes
 
-Noisy objectives, nonstationary machines, weak surrogates, excessive dimensionality and too much concurrency can waste evaluations or overfit benchmark noise.
+Noisy objectives, nonstationary machines, weak surrogates, excessive dimensionality and too much concurrency can waste evaluations or overfit benchmark noise. Non-atomic reservation can oversubscribe an evaluation or monetary cap; ambiguous refund rules can make the ledger disagree with actual resource consumption.
 
 ## Rollback trigger
 
-Stop adaptive search when its overhead exceeds evaluation savings, the budget is exhausted, or repeated validation does not confirm the selected improvement.
+Stop adaptive search when its overhead exceeds evaluation savings, the budget is exhausted, repeated validation does not confirm the selected improvement, or any concurrency test shows dispatch can exceed the declared budget after pending reservations are counted.

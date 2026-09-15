@@ -38,16 +38,41 @@ ALLOWED_V2_STATUS_CATEGORIES = {
     "Proposed / OPT synthesis",
     "Source candidate",
 }
+TEMPLATE_PLACEHOLDER_LINES = {
+    "- Repository / publication / article:",
+    "- Release/commit/PR/DOI/date:",
+    "- Exact files/sections where applicable:",
+    "- Licensing/provenance boundary where code reuse may matter:",
+    "What dominates runtime, latency, memory, I/O, CI cost, quality budget or optimization-evaluation cost?",
+    "State exactly what must remain unchanged: output bytes, theorem targets, assertions, API, numerical tolerance, ordering, statistical guarantee, evidence boundary, trust model, etc.",
+    "If the optimization changes the contract (for example exact → approximate), state the new contract explicitly instead of claiming preservation.",
+    "Describe the reusable mechanism, not only the source-project patch.",
+    "If no controlled benchmark exists, say so explicitly.",
+    "How was equivalence, correctness, bound soundness, approximation error or other contract compliance established?",
+    "Which source constants, thresholds, worker counts, bit splits, cache keys, search budgets or tolerances must be re-profiled rather than copied?",
+    "What can make this optimization invalid, slower, less robust or misleading?",
+    "Define the measured or semantic condition that disables/reverts the optimization.",
+}
 LINK_RE = re.compile(r"\[([^\]]+)\]\((optimizations/[^)#]+\.md)\)")
 ID_RE = re.compile(r"^# (OPT-[A-Z]+-\d{3}) — ")
 FILENAME_ID_RE = re.compile(r"^(OPT-[A-Z]+-\d{3})-")
 STATUS_RE = re.compile(r"^\*\*Status:\*\*\s*(.*?)\s*$")
 OPT_TOKEN_RE = re.compile(r"\bOPT-[A-Z]+-\d{3}\b")
+EMPTY_LABEL_RE = re.compile(r"^-\s+[^:]+:\s*$")
 README_ROW_RE = re.compile(
     r"^\|\s*\[(OPT-[A-Z]+-\d{3})\]\((optimizations/[^)#]+\.md)\)"
     r"\s*\|[^|]*\|\s*([^|]+?)\s*\|",
     re.MULTILINE,
 )
+CANONICAL_DEFINITION_PATTERNS = {
+    "X": re.compile(r"^- `X` — \S"),
+    "F": re.compile(r"^- `F(?: ⊆ X)?` — \S"),
+    "f": re.compile(r"^- `f(?:\s*:[^`]*)?` — \S"),
+    "d": re.compile(r"^- `d` — \S"),
+    "C": re.compile(r"^- `C` — \S"),
+    "B": re.compile(r"^- `B` — \S"),
+    "S": re.compile(r"^- `S` — \S"),
+}
 
 
 def die(msg: str) -> None:
@@ -70,10 +95,19 @@ def section_lines(text: str, heading: str) -> list[str]:
 
 
 def section_has_content(lines: list[str]) -> bool:
-    """Require visible non-whitespace content, ignoring HTML comments."""
+    """Require record-specific visible content, not stock template prompts."""
     content = "\n".join(lines)
     content = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
-    return bool(content.strip())
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line in TEMPLATE_PLACEHOLDER_LINES:
+            continue
+        if EMPTY_LABEL_RE.match(line):
+            continue
+        return True
+    return False
 
 
 def normalized_status_category(raw: str) -> str:
@@ -130,7 +164,9 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
 
         for heading in sorted(REQUIRED_V2):
             if not section_has_content(section_lines(text, heading)):
-                die(f"{path.relative_to(ROOT)} has empty mandatory section {heading}")
+                die(
+                    f"{path.relative_to(ROOT)} has empty/template-only mandatory section {heading}"
+                )
 
         contract = section_lines(text, "## Optimization problem contract")
         for field in REQUIRED_CONTRACT_FIELDS:
@@ -210,5 +246,18 @@ for record_id, path in records.items():
 problem_contract = ROOT / "OPTIMIZATION-PROBLEM.md"
 if not problem_contract.is_file():
     die("OPTIMIZATION-PROBLEM.md is missing")
+problem_text = problem_contract.read_text(encoding="utf-8")
+problem_lines = problem_text.splitlines()
+if not problem_lines or problem_lines[0] != "# Optimization Problem Contract":
+    die("OPTIMIZATION-PROBLEM.md has missing/invalid title")
+if "## Canonical contract" not in problem_lines:
+    die("OPTIMIZATION-PROBLEM.md is missing ## Canonical contract")
+canonical = section_lines(problem_text, "## Canonical contract")
+canonical_text = "\n".join(canonical)
+if "P = (X, F, f, d, C, B, S)" not in canonical_text:
+    die("OPTIMIZATION-PROBLEM.md is missing canonical P = (X, F, f, d, C, B, S) formula")
+for field, pattern in CANONICAL_DEFINITION_PATTERNS.items():
+    if not any(pattern.match(line) for line in canonical):
+        die(f"OPTIMIZATION-PROBLEM.md is missing canonical definition for {field}")
 
 print(f"CATALOG_INTEGRITY_OK records={len(records)} frozen_v1={len(FROZEN_V1)}")
