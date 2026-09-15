@@ -90,6 +90,17 @@ THEMATIC_BREAK_RE = re.compile(
 LIST_MARKER_ONLY_RE = re.compile(r"^(?:[-+*]|\d+[.)])$")
 TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
 FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+RAW_HTML_TYPE1_OPEN_RE = re.compile(
+    r"^ {0,3}<(?P<tag>script|pre|style|textarea)(?:[ \t]|>|$)", re.IGNORECASE
+)
+RAW_HTML_DECLARATION_OPEN_RE = re.compile(r"^ {0,3}<![A-Z]", re.IGNORECASE)
+RAW_HTML_BLOCK_TAG_RE = re.compile(
+    r"^ {0,3}</?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t\n/>]|$)",
+    re.IGNORECASE,
+)
+RAW_HTML_COMPLETE_TAG_RE = re.compile(
+    r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*)?/?>[ \t]*$"
+)
 EMPHASIS_WRAPPERS = ("**", "__", "~~", "*", "_")
 CANONICAL_DEFINITION_PATTERNS = {
     "X": re.compile(r"^- `X` — \S"),
@@ -135,17 +146,46 @@ def strip_html_comments_from_visible_line(
     return "".join(out), in_comment
 
 
+def raw_html_block_start(raw: str) -> tuple[str, str | None] | None:
+    """Return a raw-HTML block mode for CommonMark-style block starts.
+
+    Markdown inside a raw HTML block is not parsed as Markdown, so it must not
+    satisfy schema headings or fields. Modes are: tag (until matching close),
+    token (until literal terminator), and blank (until the first blank line).
+    """
+    type1 = RAW_HTML_TYPE1_OPEN_RE.match(raw)
+    if type1 is not None:
+        return "tag", type1.group("tag").lower()
+    if re.match(r"^ {0,3}<\?", raw):
+        return "token", "?>"
+    if re.match(r"^ {0,3}<!\[CDATA\[", raw, re.IGNORECASE):
+        return "token", "]] >".replace(" ", "")
+    if RAW_HTML_DECLARATION_OPEN_RE.match(raw):
+        return "token", ">"
+    if RAW_HTML_BLOCK_TAG_RE.match(raw) or RAW_HTML_COMPLETE_TAG_RE.match(raw):
+        return "blank", None
+    return None
+
+
+def raw_html_tag_closes(raw: str, tag: str) -> bool:
+    return re.search(rf"</{re.escape(tag)}[ \t]*>", raw, re.IGNORECASE) is not None
+
+
 def visible_nonfenced_lines(lines: list[str]) -> list[str]:
-    """Return rendered-ish Markdown lines, excluding comments and fenced blocks.
+    """Return rendered-ish Markdown lines, excluding non-Markdown constructs.
 
     Fence state is determined from the original Markdown line before HTML comments
     are removed, so a fence-looking line with trailing comment text cannot become
-    a valid closer after preprocessing.
+    a valid closer after preprocessing. Raw HTML blocks are also excluded because
+    Markdown-looking source inside them is not rendered as Markdown headings,
+    fields, links, or tables.
     """
     visible: list[str] = []
     fence_char: str | None = None
     fence_len = 0
     in_comment = False
+    html_mode: str | None = None
+    html_end: str | None = None
 
     for raw in lines:
         if fence_char is not None:
@@ -156,6 +196,24 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                 fence_char = None
                 fence_len = 0
             continue
+
+        if html_mode is not None:
+            if html_mode == "tag":
+                if html_end is not None and raw_html_tag_closes(raw, html_end):
+                    html_mode = None
+                    html_end = None
+                continue
+            if html_mode == "token":
+                if html_end is not None and html_end in raw:
+                    html_mode = None
+                    html_end = None
+                continue
+            if html_mode == "blank":
+                if raw.strip() == "":
+                    html_mode = None
+                    html_end = None
+                    visible.append("")
+                continue
 
         if in_comment:
             rendered, in_comment = strip_html_comments_from_visible_line(raw, True)
@@ -173,6 +231,18 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     fence_char = run[0]
                     fence_len = len(run)
                     continue
+
+            html_start = raw_html_block_start(raw)
+            if html_start is not None:
+                html_mode, html_end = html_start
+                if html_mode == "tag" and html_end is not None and raw_html_tag_closes(raw, html_end):
+                    html_mode = None
+                    html_end = None
+                elif html_mode == "token" and html_end is not None and html_end in raw:
+                    html_mode = None
+                    html_end = None
+                continue
+
             raw_for_parse, in_comment = strip_html_comments_from_visible_line(raw, False)
 
         if raw_for_parse:
