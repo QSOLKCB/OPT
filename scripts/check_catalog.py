@@ -88,6 +88,11 @@ CATALOG_DECISION_ROW_RE = re.compile(
     r"^\|[^|\n]*\|\s*\[(OPT-[A-Z]+-\d{3})\]\((optimizations/[^)#]+\.md)\)\s*\|",
     re.MULTILINE,
 )
+HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
+THEMATIC_BREAK_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
+FENCE_RE = re.compile(r"^(?:```|~~~)")
+LIST_MARKER_ONLY_RE = re.compile(r"^(?:[-+*]|\d+[.)])$")
+TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
 CANONICAL_DEFINITION_PATTERNS = {
     "X": re.compile(r"^- `X` — \S"),
     "F": re.compile(r"^- `F(?: ⊆ X)?` — \S"),
@@ -118,10 +123,89 @@ def section_lines(text: str, heading: str) -> list[str]:
     return lines[start:end]
 
 
+def strip_html_comments(text: str) -> str:
+    return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+
+
+def visible_nonfenced_lines(lines: list[str]) -> list[str]:
+    """Return rendered-ish Markdown lines, excluding comments and fenced examples."""
+    cleaned = strip_html_comments("\n".join(lines))
+    visible: list[str] = []
+    fence: str | None = None
+    for raw in cleaned.splitlines():
+        stripped = raw.strip()
+        if fence is not None:
+            if stripped.startswith(fence):
+                fence = None
+            continue
+        if stripped.startswith("```"):
+            fence = "```"
+            continue
+        if stripped.startswith("~~~"):
+            fence = "~~~"
+            continue
+        visible.append(raw)
+    return visible
+
+
+def markdown_table_cells(line: str) -> list[str] | None:
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return None
+    return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+
+def extract_markdown_table(
+    lines: list[str], expected_headers: tuple[str, ...], context: str
+) -> list[str]:
+    """Extract one visible Markdown table by exact header, excluding comments/fences."""
+    visible = visible_nonfenced_lines(lines)
+    expected = list(expected_headers)
+    for i, line in enumerate(visible):
+        cells = markdown_table_cells(line)
+        if cells != expected:
+            continue
+        if i + 1 >= len(visible):
+            die(f"{context} table has no separator row")
+        separator = markdown_table_cells(visible[i + 1])
+        if (
+            separator is None
+            or len(separator) != len(expected)
+            or not all(TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in separator)
+        ):
+            die(f"{context} table has an invalid separator row")
+        table = [line, visible[i + 1]]
+        for row in visible[i + 2 :]:
+            if markdown_table_cells(row) is None:
+                break
+            table.append(row)
+        return table
+    die(f"{context} is missing the expected Markdown table")
+
+
+def is_structural_only_line(line: str) -> bool:
+    """Return true for Markdown scaffolding that does not state record content."""
+    if HEADING_RE.match(line):
+        return True
+    if THEMATIC_BREAK_RE.fullmatch(line):
+        return True
+    if FENCE_RE.match(line):
+        return True
+    if LIST_MARKER_ONLY_RE.fullmatch(line):
+        return True
+    if line == ">":
+        return True
+    cells = markdown_table_cells(line)
+    if cells is not None and cells and all(
+        TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in cells
+    ):
+        return True
+    return False
+
+
 def section_has_content(lines: list[str]) -> bool:
-    """Require record-specific visible content, not stock template prompts."""
-    content = "\n".join(lines)
-    content = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
+    """Require record-specific visible content, not prompts or Markdown scaffolding."""
+    content = strip_html_comments("\n".join(lines))
     for raw in content.splitlines():
         line = raw.strip()
         if not line:
@@ -129,6 +213,8 @@ def section_has_content(lines: list[str]) -> bool:
         if line in TEMPLATE_PLACEHOLDER_LINES:
             continue
         if EMPTY_LABEL_RE.match(line):
+            continue
+        if is_structural_only_line(line):
             continue
         return True
     return False
@@ -215,7 +301,7 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
         for heading in sorted(REQUIRED_V2):
             if not section_has_content(section_lines(text, heading)):
                 die(
-                    f"{path.relative_to(ROOT)} has empty/template-only mandatory section {heading}"
+                    f"{path.relative_to(ROOT)} has empty/template/structural-only mandatory section {heading}"
                 )
 
         contract = section_lines(text, "## Optimization problem contract")
@@ -240,7 +326,7 @@ if missing_frozen:
 record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in records.items()}
 
 # Validate every optimization-record link wherever it appears. README index
-# completeness/uniqueness is checked separately from actual catalog table rows,
+# completeness/uniqueness is checked separately from its rendered catalog table,
 # so contextual prose links are allowed and do not count as duplicate index rows.
 for doc_name in ("README.md", "CATALOG.md"):
     text = (ROOT / doc_name).read_text(encoding="utf-8")
@@ -262,8 +348,12 @@ for doc_name in ("README.md", "CATALOG.md"):
         catalog_lines = section_lines(text, "## Catalog")
         if not catalog_lines:
             die("README.md is missing a non-empty ## Catalog section")
-        catalog_section = "\n".join(catalog_lines)
-        rows = README_ROW_RE.findall(catalog_section)
+        catalog_table = extract_markdown_table(
+            catalog_lines,
+            ("ID", "Optimization", "Status", "Core idea"),
+            "README.md ## Catalog",
+        )
+        rows = README_ROW_RE.findall("\n".join(catalog_table))
         row_ids = [row_id for row_id, _rel, _status in rows]
         counts = Counter(row_ids)
         bad_counts = sorted(record_id for record_id, count in counts.items() if count != 1)
@@ -311,8 +401,12 @@ for record_id, path in records.items():
 decision_lines = section_lines(catalog, "## Quick decision table")
 if not decision_lines:
     die("CATALOG.md is missing a non-empty ## Quick decision table section")
-decision_section = "\n".join(decision_lines)
-decision_rows = CATALOG_DECISION_ROW_RE.findall(decision_section)
+decision_table = extract_markdown_table(
+    decision_lines,
+    ("Bottleneck / problem shape", "First record to inspect", "Core idea"),
+    "CATALOG.md ## Quick decision table",
+)
+decision_rows = CATALOG_DECISION_ROW_RE.findall("\n".join(decision_table))
 decision_ids = [record_id for record_id, _rel in decision_rows]
 decision_counts = Counter(decision_ids)
 bad_decision_counts = sorted(
