@@ -28,6 +28,11 @@ GENERIC_SECTION_PLACEHOLDER_RE = re.compile(
     r"^(?:[-*+]\s*)?(?:unknown|tbd|todo|n/?a|none|pending)(?:[.!?])?$",
     re.IGNORECASE,
 )
+STATUS_LINE_RE = re.compile(r"^(?P<prefix>\*\*Status:\*\*)[ \t]*(?P<payload>.*)$")
+BACKTICK_SLASH_IDENTIFIER_RE = re.compile(
+    r"`(?P<left>[A-Za-z0-9_.-]+)/(?P<right>[A-Za-z0-9_.-]+)`"
+)
+REPOSITORY_CONTEXT_RE = re.compile(r"\brepo(?:sitory)?\b", re.IGNORECASE)
 MANDATORY_SECTION_HEADINGS = {
     "## Source evidence",
     "## Problem",
@@ -40,7 +45,16 @@ MANDATORY_SECTION_HEADINGS = {
     "## Failure modes",
     "## Rollback trigger",
 }
+MANDATORY_HEADING_WITH_CLOSER_RE = re.compile(
+    r"^(?P<indent> {0,3})##[ \t]+(?P<title>"
+    + "|".join(
+        re.escape(heading.removeprefix("## "))
+        for heading in sorted(MANDATORY_SECTION_HEADINGS)
+    )
+    + r")[ \t]+#+[ \t]*$"
+)
 INVALID_REFERENCE_DESTINATION = "optimizations/__invalid_reference_destination__.md"
+STATUS_WRAPPERS = ("**", "__", "~~", "*", "_", "`")
 
 
 def _normalized_reference_label(label: str) -> str:
@@ -93,6 +107,24 @@ def _render_reference_aware_candidate(value: str, definitions: set[str]) -> str:
     return rendered
 
 
+def _unwrap_balanced_formatting(value: str) -> str:
+    """Remove only formatting markers that wrap the complete status category."""
+    result = value.strip()
+    changed = True
+    while changed:
+        changed = False
+        for marker in STATUS_WRAPPERS:
+            if (
+                len(result) > 2 * len(marker)
+                and result.startswith(marker)
+                and result.endswith(marker)
+            ):
+                result = result[len(marker) : -len(marker)].strip()
+                changed = True
+                break
+    return result
+
+
 def canonicalize_classification_placeholders(text: str) -> str:
     """Reject canonical placeholders hidden behind valid reference links."""
     definitions = _reference_definitions(text)
@@ -116,6 +148,79 @@ def canonicalize_classification_placeholders(text: str) -> str:
             )
         else:
             out.append(raw)
+
+    return "".join(out)
+
+
+def canonicalize_required_heading_closers(text: str) -> str:
+    """Normalize optional ATX closing hashes on mandatory level-two headings."""
+    out: list[str] = []
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+        match = MANDATORY_HEADING_WITH_CLOSER_RE.fullmatch(content)
+        if match is None:
+            out.append(raw)
+            continue
+        out.append(f"{match.group('indent')}## {match.group('title')}{ending}")
+    return "".join(out)
+
+
+def canonicalize_record_status_categories(text: str) -> str:
+    """Normalize balanced Markdown around rendered record status categories."""
+    if re.search(r"(?m)^# OPT-[A-Z]+-\d{3} — ", text) is None:
+        return text
+
+    out: list[str] = []
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+        match = STATUS_LINE_RE.fullmatch(content)
+        if match is None:
+            out.append(raw)
+            continue
+
+        payload = match.group("payload")
+        category, separator, suffix = payload.partition(";")
+        normalized_category = _unwrap_balanced_formatting(category)
+        if separator:
+            out.append(
+                f"{match.group('prefix')} {normalized_category};{suffix}{ending}"
+            )
+        else:
+            out.append(f"{match.group('prefix')} {normalized_category}{ending}")
+    return "".join(out)
+
+
+def canonicalize_uncontextualized_repository_tokens(text: str) -> str:
+    """Prevent arbitrary slash-shaped code spans from satisfying source identity."""
+    if re.search(r"(?m)^# OPT-[A-Z]+-\d{3} — ", text) is None:
+        return text
+
+    out: list[str] = []
+    in_source_evidence = False
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+
+        if content == "## Source evidence":
+            in_source_evidence = True
+            out.append(raw)
+            continue
+        if ATX_LEVEL_1_OR_2_RE.match(content):
+            in_source_evidence = False
+            out.append(raw)
+            continue
+
+        if in_source_evidence and not REPOSITORY_CONTEXT_RE.search(content):
+            content = BACKTICK_SLASH_IDENTIFIER_RE.sub(
+                lambda match: f"'{match.group('left')}/{match.group('right')}'",
+                content,
+            )
+            out.append(content + ending)
+            continue
+
+        out.append(raw)
 
     return "".join(out)
 
@@ -193,6 +298,9 @@ def canonicalize_markdown(text: str, *, link_scan_document: bool) -> str:
     normalized = _base_canonicalize_markdown(
         text, link_scan_document=link_scan_document
     )
+    normalized = canonicalize_required_heading_closers(normalized)
+    normalized = canonicalize_record_status_categories(normalized)
+    normalized = canonicalize_uncontextualized_repository_tokens(normalized)
     normalized = canonicalize_mandatory_section_placeholders(normalized)
     if link_scan_document:
         normalized = canonicalize_reference_record_links(normalized)
