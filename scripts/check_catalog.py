@@ -39,6 +39,16 @@ REQUIRED_CLASSIFICATION_FIELDS = (
     "Parallelism",
     "Exactness",
 )
+CLASSIFICATION_TEMPLATE_VALUES = {
+    "Variables": "continuous / integer / categorical / conditional / mixed",
+    "Search scope": "local / global",
+    "Objective behavior": "deterministic / noisy / stochastic",
+    "Information": "gradient / derivative-free / black-box",
+    "Evaluation cost": "cheap / moderate / expensive",
+    "Constraints": "bounds / equality / inequality / semantic / resource",
+    "Parallelism": "sequential / synchronous batch / asynchronous",
+    "Exactness": "exact / approximation permitted under explicit error contract",
+}
 ALLOWED_V2_STATUS_CATEGORIES = {
     "Verified",
     "Verified, environment-specific",
@@ -126,8 +136,14 @@ def normalized_status_category(raw: str) -> str:
     return plain.split(";", 1)[0].strip()
 
 
-def require_prefixed_fields(path: Path, lines: list[str], fields: tuple[str, ...], section: str) -> None:
-    """Require exactly one non-empty '- Field:' row for every declared field."""
+def require_prefixed_fields(
+    path: Path,
+    lines: list[str],
+    fields: tuple[str, ...],
+    section: str,
+    rejected_values: dict[str, str] | None = None,
+) -> None:
+    """Require exactly one selected non-empty '- Field:' row for every declared field."""
     for field in fields:
         prefix = f"- {field}:"
         matches = [line for line in lines if line.startswith(prefix)]
@@ -136,8 +152,14 @@ def require_prefixed_fields(path: Path, lines: list[str], fields: tuple[str, ...
                 f"{path.relative_to(ROOT)} must contain exactly one field "
                 f"'{prefix}' in {section}"
             )
-        if not matches[0][len(prefix) :].strip():
+        value = matches[0][len(prefix) :].strip()
+        if not value:
             die(f"{path.relative_to(ROOT)} has empty field {field} in {section}")
+        if rejected_values is not None and value == rejected_values.get(field):
+            die(
+                f"{path.relative_to(ROOT)} has unselected template placeholder "
+                f"for {field} in {section}: '{value}'"
+            )
 
 
 records: dict[str, Path] = {}
@@ -204,6 +226,7 @@ for path in sorted(OPT_DIR.glob("OPT-*.md")):
             contract,
             REQUIRED_CLASSIFICATION_FIELDS,
             "## Optimization problem contract",
+            rejected_values=CLASSIFICATION_TEMPLATE_VALUES,
         )
 
 missing_frozen = sorted(FROZEN_V1 - records.keys())
