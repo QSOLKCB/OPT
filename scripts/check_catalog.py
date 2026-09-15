@@ -87,8 +87,6 @@ EMPTY_LABEL_RE = re.compile(r"^-\s+[^:]+:\s*$")
 LINK_REFERENCE_DEFINITION_RE = re.compile(
     r"^\[(?:\\.|[^\[\]\\])+\]:[ \t]+\S.*$"
 )
-INLINE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
-INLINE_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 REFERENCE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[[^\]]*\]")
 REFERENCE_LINK_RE = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
 INLINE_HTML_TAG_RE = re.compile(
@@ -309,13 +307,235 @@ def section_lines(text: str, heading: str) -> list[str]:
     return lines[start:end]
 
 
+def is_backslash_escaped(text: str, index: int) -> bool:
+    count = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        count += 1
+        cursor -= 1
+    return count % 2 == 1
+
+
+def backtick_run_length(text: str, index: int) -> int:
+    cursor = index
+    while cursor < len(text) and text[cursor] == "`":
+        cursor += 1
+    return cursor - index
+
+
+def protect_code_spans(text: str) -> tuple[str, dict[str, str]]:
+    """Replace parsed code spans with private-use sentinels and preserve their text."""
+    out: list[str] = []
+    protected: dict[str, str] = {}
+    i = 0
+    while i < len(text):
+        if text[i] != "`" or is_backslash_escaped(text, i):
+            out.append(text[i])
+            i += 1
+            continue
+
+        run_len = backtick_run_length(text, i)
+        j = i + run_len
+        close_start: int | None = None
+        close_end: int | None = None
+        while j < len(text):
+            if text[j] != "`":
+                j += 1
+                continue
+            candidate_len = backtick_run_length(text, j)
+            if candidate_len == run_len:
+                close_start = j
+                close_end = j + candidate_len
+                break
+            j += candidate_len
+
+        if close_start is None or close_end is None:
+            out.append(text[i : i + run_len])
+            i += run_len
+            continue
+
+        token = chr(0xE000 + len(protected))
+        protected[token] = text[i + run_len : close_start]
+        out.append(token)
+        i = close_end
+
+    return "".join(out), protected
+
+
+def find_label_close(text: str, open_index: int) -> int | None:
+    depth = 1
+    i = open_index + 1
+    while i < len(text):
+        if text[i] == "\\" and i + 1 < len(text):
+            i += 2
+            continue
+        if text[i] == "[":
+            depth += 1
+        elif text[i] == "]":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def parse_link_title_and_close(text: str, index: int) -> int | None:
+    """Parse whitespace plus an optional CommonMark-style title and outer close."""
+    i = index
+    while i < len(text) and text[i] in " \t\n":
+        i += 1
+    if i < len(text) and text[i] == ")":
+        return i + 1
+    if i >= len(text):
+        return None
+
+    opener = text[i]
+    if opener not in ('"', "'", "("):
+        return None
+    closer = ")" if opener == "(" else opener
+    i += 1
+    while i < len(text):
+        if text[i] == "\\" and i + 1 < len(text):
+            i += 2
+            continue
+        if text[i] == closer:
+            i += 1
+            break
+        if text[i] == "\n":
+            return None
+        i += 1
+    else:
+        return None
+
+    while i < len(text) and text[i] in " \t\n":
+        i += 1
+    if i < len(text) and text[i] == ")":
+        return i + 1
+    return None
+
+
+def find_inline_link_end(text: str, open_paren: int) -> int | None:
+    """Return the end of a valid inline-link destination/title, or None."""
+    i = open_paren + 1
+    while i < len(text) and text[i] in " \t\n":
+        i += 1
+    if i >= len(text):
+        return None
+    if text[i] == ")":
+        return i + 1
+
+    if text[i] == "<":
+        i += 1
+        while i < len(text):
+            if text[i] == "\\" and i + 1 < len(text):
+                i += 2
+                continue
+            if text[i] == ">":
+                return parse_link_title_and_close(text, i + 1)
+            if text[i] in "\n<":
+                return None
+            i += 1
+        return None
+
+    depth = 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\" and i + 1 < len(text):
+            i += 2
+            continue
+        if char == "(":
+            depth += 1
+            i += 1
+            continue
+        if char == ")":
+            if depth == 0:
+                return i + 1
+            depth -= 1
+            i += 1
+            continue
+        if char in " \t\n" and depth == 0:
+            return parse_link_title_and_close(text, i)
+        if char in "<>" or ord(char) < 0x20:
+            return None
+        i += 1
+    return None
+
+
+def strip_inline_links(text: str) -> str:
+    """Keep rendered labels while discarding valid inline-link/image destinations."""
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        image = text.startswith("![", i)
+        if image:
+            label_open = i + 1
+        elif text[i] == "[":
+            label_open = i
+        else:
+            out.append(text[i])
+            i += 1
+            continue
+
+        label_close = find_label_close(text, label_open)
+        if label_close is None or label_close + 1 >= len(text) or text[label_close + 1] != "(":
+            out.append(text[i])
+            i += 1
+            continue
+        link_end = find_inline_link_end(text, label_close + 1)
+        if link_end is None:
+            out.append(text[i])
+            i += 1
+            continue
+
+        out.append(text[label_open + 1 : label_close])
+        i = link_end
+    return "".join(out)
+
+
 def markdown_table_cells(line: str) -> list[str] | None:
+    """Split a pipe table on unescaped delimiters outside backtick code spans."""
     if is_indented_code_line(line):
         return None
     stripped = line.strip()
     if not stripped.startswith("|"):
         return None
-    return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+    cells: list[str] = []
+    current: list[str] = []
+    code_run_len: int | None = None
+    i = 1
+    while i < len(stripped):
+        char = stripped[i]
+        if char == "`" and not is_backslash_escaped(stripped, i):
+            run_len = backtick_run_length(stripped, i)
+            if code_run_len is None:
+                code_run_len = run_len
+            elif run_len == code_run_len:
+                code_run_len = None
+            current.append(stripped[i : i + run_len])
+            i += run_len
+            continue
+
+        if char == "|" and code_run_len is None:
+            if is_backslash_escaped(stripped, i):
+                if current and current[-1] == "\\":
+                    current.pop()
+                current.append("|")
+            else:
+                cells.append("".join(current).strip())
+                current = []
+            i += 1
+            continue
+
+        current.append(char)
+        i += 1
+
+    trailing_pipe_is_delimiter = (
+        stripped.endswith("|") and not is_backslash_escaped(stripped, len(stripped) - 1)
+    )
+    if current or not trailing_pipe_is_delimiter:
+        cells.append("".join(current).strip())
+    return cells
 
 
 def extract_markdown_table(
@@ -385,15 +605,16 @@ def parse_record_link_cell(cell: str, context: str) -> tuple[str, str]:
 
 
 def rendered_inline_text(value: str) -> str:
-    """Approximate visible inline text for required field-value validation."""
-    text = value
-    text = INLINE_IMAGE_RE.sub(lambda m: m.group(1), text)
-    text = INLINE_LINK_RE.sub(lambda m: m.group(1), text)
+    """Approximate rendered inline text for required field-value validation."""
+    text, protected_code = protect_code_spans(value)
+    text = strip_inline_links(text)
     text = REFERENCE_IMAGE_RE.sub(lambda m: m.group(1), text)
     text = REFERENCE_LINK_RE.sub(lambda m: m.group(1), text)
     text = INLINE_HTML_TAG_RE.sub("", text)
     text = re.sub(r"[`*_~]", "", text)
     text = re.sub(r"\\(.)", r"\1", text)
+    for token, code_text in protected_code.items():
+        text = text.replace(token, code_text)
     return html.unescape(text).strip()
 
 
