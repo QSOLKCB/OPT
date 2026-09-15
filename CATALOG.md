@@ -4,22 +4,22 @@
 
 | Bottleneck / problem shape | First record to inspect | Core idea |
 | --- | --- | --- |
-| Deterministic tests/sweeps dominate runtime | `OPT-PY-001` | Reduce redundant/high-cost work while keeping coverage semantics |
-| Same expensive result is recomputed at a proven-equivalent state | `OPT-INV-001` | Prove equivalence, then reuse |
-| Lean dependency reconstruction dominates CI | `OPT-LEAN-001` | Verify reusable dependency state; rebuild current project source |
-| Independent work can execute concurrently | `OPT-PAR-001` | Bound workers and prove scalar/parallel equivalence |
-| Slow control state is inside a high-rate numerical/audio loop | `OPT-DSP-001` | Separate rates, sparse-evaluate, vectorize |
-| Inputs are unchanged but pipeline stages rerun | `OPT-INC-001` | Bind work to complete input signatures and persist only successful state |
-| Many simultaneous callers request identical not-yet-computed work | `OPT-COAL-001` | One in-flight computation, many waiters |
-| Integer sets alternate between sparse and dense regions | `OPT-SET-001` | Density-adaptive representation with exact set algebra |
-| One global lock/counter/runtime domain serializes independent work | `OPT-CONT-001` | Partition coordination while preserving the global invariant |
-| Same deterministic transform is repeated for every consumer/replay | `OPT-FAN-001` | Materialize once, reuse many times |
-| Expensive parameter evaluations are being guessed or exhaustively swept | `OPT-SEARCH-001` | Adaptive, budget-aware search over the declared problem contract |
-| Exactness may be traded inside an explicit quality envelope | `OPT-APPROX-001` | Bound the error/degradation and the resource cost together |
-| Expensive stages consume candidates later discarded | `OPT-REDUCE-001` | Reduce the working set before composition |
-| Non-critical work delays the dependency chain users actually wait on | `OPT-CRIT-001` | Prioritize the critical path; speculate/defer deliberately |
-| Small performance regressions accumulate unnoticed | `OPT-BUDGET-001` | Guard stable performance expectations in CI |
-| Discrete search space is huge but optimistic bounds are available | `OPT-PRUNE-001` | Prune regions that provably cannot beat the incumbent |
+| Deterministic tests/sweeps dominate runtime | [OPT-PY-001](optimizations/OPT-PY-001-deterministic-test-execution.md) | Reduce redundant/high-cost work while keeping coverage semantics |
+| Same expensive result is recomputed at a proven-equivalent state | [OPT-INV-001](optimizations/OPT-INV-001-invariant-driven-reuse.md) | Prove equivalence, then reuse |
+| Lean dependency reconstruction dominates CI | [OPT-LEAN-001](optimizations/OPT-LEAN-001-trust-preserving-lean-ci.md) | Verify reusable dependency state; rebuild current project source |
+| Independent work can execute concurrently | [OPT-PAR-001](optimizations/OPT-PAR-001-bounded-parallel-execution.md) | Bound workers and prove scalar/parallel equivalence |
+| Slow control state is inside a high-rate numerical/audio loop | [OPT-DSP-001](optimizations/OPT-DSP-001-control-rate-sparse-vector-dsp.md) | Separate rates, sparse-evaluate, vectorize |
+| Inputs are unchanged but pipeline stages rerun | [OPT-INC-001](optimizations/OPT-INC-001-signature-bound-incremental-execution.md) | Bind work to complete input signatures and persist only successful state |
+| Many simultaneous callers request identical not-yet-computed work | [OPT-COAL-001](optimizations/OPT-COAL-001-concurrent-duplicate-work-coalescing.md) | One in-flight computation, many waiters |
+| Integer sets alternate between sparse and dense regions | [OPT-SET-001](optimizations/OPT-SET-001-density-adaptive-compact-sets.md) | Density-adaptive representation with exact set algebra |
+| One global lock/counter/runtime domain serializes independent work | [OPT-CONT-001](optimizations/OPT-CONT-001-partitioned-coordination-domains.md) | Partition coordination while preserving the global invariant |
+| Same deterministic transform is repeated for every consumer/replay | [OPT-FAN-001](optimizations/OPT-FAN-001-shared-materialization-fanout.md) | Materialize once, reuse many times |
+| Expensive parameter evaluations are being guessed or exhaustively swept | [OPT-SEARCH-001](optimizations/OPT-SEARCH-001-budget-aware-adaptive-search.md) | Adaptive, budget-aware search over the declared problem contract |
+| Exactness may be traded inside an explicit quality envelope | [OPT-APPROX-001](optimizations/OPT-APPROX-001-contract-bounded-approximation.md) | Bound the error/degradation and the resource cost together |
+| Expensive stages consume candidates later discarded | [OPT-REDUCE-001](optimizations/OPT-REDUCE-001-early-working-set-reduction.md) | Reduce the working set before composition |
+| Non-critical work delays the dependency chain users actually wait on | [OPT-CRIT-001](optimizations/OPT-CRIT-001-critical-path-prioritization.md) | Prioritize the critical path; speculate/defer deliberately |
+| Small performance regressions accumulate unnoticed | [OPT-BUDGET-001](optimizations/OPT-BUDGET-001-performance-regression-budgets.md) | Guard stable performance expectations in CI |
+| Discrete search space is huge but optimistic bounds are available | [OPT-PRUNE-001](optimizations/OPT-PRUNE-001-bound-driven-search-space-pruning.md) | Prune regions that provably cannot beat the incumbent |
 
 Before selecting a record, define the target problem using [`OPTIMIZATION-PROBLEM.md`](OPTIMIZATION-PROBLEM.md).
 
