@@ -33,11 +33,11 @@ Then record every required problem-classification dimension from `OPTIMIZATION-P
 - Variables: continuous / integer / categorical / conditional / mixed
 - Search scope: local / global
 - Objective behavior: deterministic / noisy / stochastic
-- Information: gradient / derivative-free / black-box
+- Information: gradient available / derivative-free / black-box
 - Evaluation cost: cheap / moderate / expensive
 - Constraints: bounds / equality / inequality / semantic / resource
 - Parallelism: sequential / synchronous batch / asynchronous
-- Exactness: exact / approximation permitted under explicit error contract
+- Exactness: exact / approximation permitted under an explicit error contract
 
 ## Preserved contract
 
