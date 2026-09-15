@@ -22,7 +22,7 @@ A large array-of-structures working set is repeatedly traversed by multiple work
 - F: Candidates that preserve exact source-to-output semantics, deterministic partitioning and reduction, represent every required field without lossy reinterpretation, keep worker-local memory bounded, and retain an unchanged canonical/reference path.
 - f: End-to-end runtime, peak working-memory/RSS evidence and useful worker scaling over the declared workload matrix.
 - d: Pareto-minimize runtime and memory footprint subject to exact parity; reject candidates whose timing gain requires unacceptable RSS growth or unstable worker scaling.
-- C: Exact checksum/output equality with the reference path, deterministic worker-count behavior where required, no dropped/duplicated elements, and bounded worker-local storage independent of total resident population.
+- C: Exact canonical-output equality with the reference path, deterministic worker-count behavior where required, no dropped/duplicated elements, observable ordering preserved where required, and bounded worker-local storage independent of total resident population. Aggregate checksums are supplementary evidence unless the aggregate is itself the complete public output contract.
 - B: A bounded worker-count × tile-size benchmark matrix with repeated runs and representative workload sizes on the target machines.
 - S: Stop after a practical winning tile/worker region is identified or all candidates fail; do not promote a single pathological fast point without surrounding evidence.
 - Variables: integer and categorical
@@ -36,7 +36,9 @@ A large array-of-structures working set is repeatedly traversed by multiple work
 
 ## Preserved contract
 
-The tiled SoA path must compute the same declared outputs/checksum as the reference AoS path for every processed element and supported worker count. Reordering storage is allowed only when observable output order, tie behavior, reduction semantics and deterministic identity remain unchanged.
+The tiled SoA path must compute the same declared outputs as the reference AoS path for every processed element and supported worker count. When the interface exposes per-element values or ordering, validation must compare those complete outputs element-by-element and preserve observable order. Reordering storage is allowed only when observable output order, tie behavior, reduction semantics and deterministic identity remain unchanged.
+
+An aggregate checksum may remain as an additional repeatability/corruption signal, but it is not a substitute for full-output comparison when richer output is observable. If the target contract exposes only the aggregate itself, state that boundary explicitly.
 
 Packing fields into narrower representations is permitted only when the representation is proven exact for the target domain or when the target contract explicitly allows approximation. This record is exact by default.
 
@@ -62,12 +64,12 @@ The key scaling property is that optimized working storage grows roughly with wo
 - Small invalidation / partial-work case where relevant: small tile/worker matrix cells validate capacity and partition behavior.
 - Large invalidation / full-work case where relevant: donor sweep supports resident populations up to the full experimental workload and multiple tile sizes/workers.
 - Optimized: bounded worker-local compact SoA tiles with worker-local x/y/output scratch and SIMD-friendly batch hashing.
-- Speedup / memory / I/O / quality change: donor PR #12 states that PR #11 established exact cross-platform parity and strong multi-host performance/memory evidence; this record intentionally does not turn those donor observations into universal target numbers.
+- Speedup / memory / I/O / quality change: donor PR #12 states that PR #11 established exact cross-platform checksum parity and strong multi-host performance/memory evidence; this portable record additionally requires full canonical-output comparison whenever a target exposes per-element values or order.
 - Variance / repetitions / raw samples: donor sweep emits raw matrix data, comparison tables and receipts; targets must repeat the sweep locally.
 
 ## Validation
 
-- Check exact reference/generic/native/SoA checksum equality for every matrix cell.
+- When the target exposes per-element values, compare the complete canonical/reference and SoA outputs element-by-element for every matrix cell, including observable order. Retain exact checksum equality as an additional repeatability signal rather than the sole equivalence proof. If the aggregate is the complete public output, state that explicitly.
 - Verify deterministic partitioning covers every source element exactly once.
 - Verify worker-count invariance when the target contract requires it.
 - Test tile-capacity boundaries, partial final tiles and minimum/maximum supported sizes.
@@ -87,12 +89,13 @@ Re-profile hot-field selection, field widths, tile capacity, cache hierarchy, wo
 - Narrow packing truncates or aliases values outside the donor's domain.
 - Worker-local scratch multiplies memory enough to erase the AoS savings at high worker counts.
 - Memory bandwidth becomes the bottleneck after vectorization/parallelism.
+- Aggregate checksum parity masks an element-level or ordering defect on an interface that exposes richer output.
 - Deterministic reduction is replaced by completion-order reduction and changes results.
 - A guarded experimental win is promoted globally without evidence across the supported hardware/workload envelope.
 
 ## Rollback trigger
 
-Fall back to the canonical representation/path on any parity failure, missing/duplicated work, representation-range violation, unstable worker-count behavior, unacceptable RSS growth, or reproducible end-to-end slowdown. Keep the optimized path opt-in when the winning region is narrow or host-specific.
+Fall back to the canonical representation/path on any full-output parity failure, missing/duplicated work, observable ordering mismatch, representation-range violation, unstable worker-count behavior, unacceptable RSS growth, or reproducible end-to-end slowdown. Keep the optimized path opt-in when the winning region is narrow or host-specific.
 
 ## Composition notes
 

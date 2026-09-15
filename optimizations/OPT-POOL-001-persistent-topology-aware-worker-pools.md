@@ -37,11 +37,15 @@ A validated parallel kernel is fast enough that repeatedly creating worker threa
 
 Persistent reuse changes worker lifetime, not computation semantics. Each dispatch must process the same logical work as the reference/spawned path, and reduction must remain deterministic where required. Buffer reuse must reset or overwrite all state that can affect a later dispatch.
 
+A failed or cancelled dispatch may be followed by reuse only after every worker-local buffer, queue, completion flag and dispatch-generation marker is returned to a known clean state. If that reset cannot be proven complete, mark the pool unusable and create a fresh pool before accepting more work.
+
 ## Optimization
 
 Create workers once, allocate their reusable local buffers once, and dispatch repeated jobs through the persistent pool. Give each worker a stable deterministic range or identity. Allow workers to finish independently, but collect/reduce results under a deterministic ordering rule when arithmetic or output order requires it.
 
 Expose topology policy explicitly. A `physical-first` policy may cap workers at detected physical cores; a `logical` policy may include SMT threads. Detection must fail softly and record the fallback instead of pretending unavailable topology data is authoritative.
+
+Treat dispatch completion as a state transition. Successful completion must leave all reusable state ready for the next generation. Failure or cancellation must either run the same complete reset protocol or retire the pool so partial state cannot leak into a later dispatch.
 
 Separate steady-state dispatch timing from startup/teardown, then include lifecycle cost when deciding whether persistence is worthwhile for the real repetition horizon.
 
@@ -59,16 +63,17 @@ Separate steady-state dispatch timing from startup/teardown, then include lifecy
 
 ## Validation
 
-Require equality among canonical/reference output, spawned optimized output, first persistent dispatch and subsequent persistent dispatches. Test repeated reuse, shutdown, worker-count changes, topology fallback and completion-order independence. Record requested/effective workers and topology source. Measure startup and teardown separately, then evaluate amortized cost for the actual repetition horizon.
+Require equality among canonical/reference output, spawned optimized output, first persistent dispatch and subsequent persistent dispatches. In addition to ordinary repeated-success cases, force success → failure → success and success → cancellation → success sequences after partial worker activity. Verify that every reusable buffer, queue, completion record and dispatch generation is reset before the final success, or verify that the affected pool is retired and replaced before reuse. Test shutdown, worker-count changes, topology fallback and completion-order independence. Record requested/effective workers and topology source. Measure startup and teardown separately, then evaluate amortized cost for the actual repetition horizon.
 
 ## Target-repo adaptation
 
-Re-profile pool lifetime, worker count, SMT policy, buffer size, task granularity, expected number of dispatches, CPU allowance/cgroup constraints and shutdown behavior. Do not infer CPU affinity or NUMA placement from topology-aware worker counting; those require separate mechanisms and evidence.
+Re-profile pool lifetime, worker count, SMT policy, buffer size, task granularity, expected number of dispatches, CPU allowance/cgroup constraints, failure-reset protocol and shutdown behavior. Do not infer CPU affinity or NUMA placement from topology-aware worker counting; those require separate mechanisms and evidence.
 
 ## Failure modes
 
 - The workload is too infrequent to amortize pool startup and retained resources.
 - Reused buffers leak stale state between dispatches.
+- A failed/cancelled dispatch leaves partial buffers, queue entries or completion state that contaminates the next generation.
 - SMT/logical workers increase contention or memory pressure.
 - Container CPU allowance or topology changes after pool creation.
 - Long-lived workers hold scarce memory/resources during idle periods.
@@ -76,7 +81,7 @@ Re-profile pool lifetime, worker count, SMT policy, buffer size, task granularit
 
 ## Rollback trigger
 
-Use spawned/canonical execution on any parity failure, stale-state leak, shutdown/resource leak, topology mismatch, or lifecycle-adjusted slowdown for the target repetition horizon. Disable physical-first selection when topology detection is unreliable and record the fallback.
+Use spawned/canonical execution on any parity failure, stale-state leak, failed-dispatch reset failure, shutdown/resource leak, topology mismatch, or lifecycle-adjusted slowdown for the target repetition horizon. Retire a pool immediately when a failure/cancellation leaves its reusable state uncertain. Disable physical-first selection when topology detection is unreliable and record the fallback.
 
 ## Composition notes
 
