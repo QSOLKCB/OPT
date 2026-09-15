@@ -83,6 +83,9 @@ FILENAME_ID_RE = re.compile(r"^(OPT-[A-Z]+-\d{3})-")
 STATUS_RE = re.compile(r"^\*\*Status:\*\*\s*(.*?)\s*$")
 OPT_TOKEN_RE = re.compile(r"\bOPT-[A-Z]+-\d{3}\b")
 EMPTY_LABEL_RE = re.compile(r"^-\s+[^:]+:\s*$")
+LINK_REFERENCE_DEFINITION_RE = re.compile(
+    r"^\[(?:\\.|[^\[\]\\])+\]:[ \t]+\S.*$"
+)
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
 THEMATIC_BREAK_RE = re.compile(
     r"^(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
@@ -366,6 +369,8 @@ def is_structural_only_line(line: str) -> bool:
     if HEADING_RE.match(line) or THEMATIC_BREAK_RE.fullmatch(line):
         return True
     if LIST_MARKER_ONLY_RE.fullmatch(line) or line == ">":
+        return True
+    if LINK_REFERENCE_DEFINITION_RE.fullmatch(line):
         return True
     cells = markdown_table_cells(line)
     return bool(cells and all(TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in cells))
