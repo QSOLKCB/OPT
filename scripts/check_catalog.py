@@ -93,7 +93,7 @@ HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
 THEMATIC_BREAK_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
 LIST_MARKER_ONLY_RE = re.compile(r"^(?:[-+*]|\d+[.)])$")
 TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
-FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 CANONICAL_DEFINITION_PATTERNS = {
     "X": re.compile(r"^- `X` — \S"),
     "F": re.compile(r"^- `F(?: ⊆ X)?` — \S"),
@@ -110,7 +110,20 @@ def die(msg: str) -> None:
 
 
 def strip_html_comments(text: str) -> str:
-    return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    """Strip HTML comments; an unmatched opener hides the remainder through EOF."""
+    visible: list[str] = []
+    cursor = 0
+    while True:
+        start = text.find("<!--", cursor)
+        if start < 0:
+            visible.append(text[cursor:])
+            break
+        visible.append(text[cursor:start])
+        end = text.find("-->", start + 4)
+        if end < 0:
+            break
+        cursor = end + 3
+    return "".join(visible)
 
 
 def visible_nonfenced_lines(lines: list[str]) -> list[str]:
@@ -121,17 +134,23 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
     fence_len = 0
 
     for raw in cleaned.splitlines():
-        stripped = raw.strip()
         if fence_char is not None:
-            close = re.fullmatch(rf"{re.escape(fence_char)}{{{fence_len},}}\s*", stripped)
+            close = re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*", raw
+            )
             if close is not None:
                 fence_char = None
                 fence_len = 0
             continue
 
-        opener = FENCE_OPEN_RE.match(stripped)
+        opener = FENCE_OPEN_RE.match(raw)
         if opener is not None:
             run = opener.group(1)
+            info = opener.group(2)
+            # CommonMark forbids backticks inside an opening backtick fence's info string.
+            if run[0] == "`" and "`" in info:
+                visible.append(raw)
+                continue
             fence_char = run[0]
             fence_len = len(run)
             continue
@@ -169,7 +188,7 @@ def markdown_table_cells(line: str) -> list[str] | None:
 def extract_markdown_table(
     lines: list[str], expected_headers: tuple[str, ...], context: str
 ) -> list[str]:
-    """Extract one visible table by exact header and validate every row width."""
+    """Extract one visible table and require well-formed, non-empty data cells."""
     visible = visible_nonfenced_lines(lines)
     expected = list(expected_headers)
     for i, line in enumerate(visible):
@@ -194,6 +213,8 @@ def extract_markdown_table(
                     f"{context} table row has {len(cells)} column(s); "
                     f"expected {len(expected)}: {row.strip()}"
                 )
+            if any(not cell for cell in cells):
+                die(f"{context} table row contains an empty required cell: {row.strip()}")
             table.append(row)
         return table
     die(f"{context} is missing the expected Markdown table")
@@ -205,10 +226,7 @@ def is_structural_only_line(line: str) -> bool:
     if LIST_MARKER_ONLY_RE.fullmatch(line) or line == ">":
         return True
     cells = markdown_table_cells(line)
-    return bool(
-        cells
-        and all(TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in cells)
-    )
+    return bool(cells and all(TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in cells))
 
 
 def section_has_content(lines: list[str]) -> bool:
