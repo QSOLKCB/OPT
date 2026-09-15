@@ -6,13 +6,15 @@ scratch copy, canonicalizes rendering-equivalent forms that the core otherwise r
 or overlooks, and runs the core against that copy:
 
 * one-to-three spaces before ATX headings (valid CommonMark indentation),
-* optional Markdown titles on links to optimization-record Markdown files,
+* optional Markdown titles and angle-bracket destinations on record links,
 * inline-code examples that resemble optimization-record links,
 * block-quoted link-reference definitions that actually parse as definitions,
 * classification placeholders hidden behind rendering-only inline formatting,
 * generic TODO/TBD-style required-field placeholders,
-* hash-shaped source text that lacks explicit commit/revision context, and
-* type-7 raw-HTML tags that CommonMark keeps inside an already-open paragraph.
+* hash-shaped source text that lacks explicit commit/revision context,
+* type-7 raw-HTML tags that CommonMark keeps inside an already-open paragraph,
+* thematic breaks after paragraph-interrupting blocks that are not Setext headings, and
+* heading-shaped suffixes after multiline inline comments that remain paragraph text.
 
 The repository working tree is never modified by this normalization step.
 """
@@ -31,13 +33,18 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE_NAME = "check_catalog_core.py"
 ATX_INDENT_RE = re.compile(r"(?m)^ {1,3}(?=#{1,6}(?:[ \t]|$))")
 ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
+ATX_SUFFIX_RE = re.compile(r"^(?P<indent> {0,3})(?P<hashes>#{1,6})(?=[ \t]|$)")
 FENCE_LINE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
 LIST_BLOCK_RE = re.compile(r"^ {0,3}(?:[-+*]|\d+[.)])[ \t]+")
 THEMATIC_BREAK_RE = re.compile(
     r"^ {0,3}(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
 )
+SETEXT_H2_LINE_RE = re.compile(r"^(?P<indent> {0,3})-{3,}[ \t]*$")
 RECORD_LINK_START_RE = re.compile(
     r"\[([^\]\r\n]+)\]\((optimizations/[^\s)#]+\.md)"
+)
+ANGLE_RECORD_DEST_RE = re.compile(
+    r"(?P<prefix>\[[^\]\r\n]+\]\()<(?P<dest>optimizations/[^\s<>#]+\.md)>"
 )
 BLOCKQUOTE_PREFIX_RE = re.compile(r"^ {0,3}>[ \t]?")
 LINK_REFERENCE_DEFINITION_RE = re.compile(
@@ -281,6 +288,13 @@ def mask_inline_code_record_destinations(text: str) -> str:
     return "".join(out)
 
 
+def canonicalize_angle_record_destinations(text: str) -> str:
+    """Remove CommonMark angle brackets around optimization-record destinations."""
+    return ANGLE_RECORD_DEST_RE.sub(
+        lambda match: match.group("prefix") + match.group("dest"), text
+    )
+
+
 def canonicalize_record_link_titles(text: str) -> str:
     """Drop only syntactically complete optional titles from OPT-record links."""
     out: list[str] = []
@@ -421,15 +435,114 @@ def canonicalize_type7_html_paragraph_interruptions(text: str) -> str:
             continue
 
         if paragraph_open and _is_type7_complete_tag_line(content):
-            # The core is deliberately source-strict and would otherwise start a type-7
-            # raw-HTML block here. Prefix only the scratch copy so it remains paragraph
-            # text, matching CommonMark's rule that type-7 blocks cannot interrupt one.
             out.append("INLINE_HTML_CONTINUATION " + content.lstrip() + ending)
             paragraph_open = True
             continue
 
         out.append(raw)
         paragraph_open = _line_can_open_or_continue_paragraph(content)
+
+    return "".join(out)
+
+
+def _previous_line_interrupts_setext_paragraph(line: str) -> bool:
+    return bool(
+        LIST_BLOCK_RE.match(line)
+        or BLOCKQUOTE_PREFIX_RE.match(line)
+        or ATX_HEADING_RE.match(line)
+        or FENCE_LINE_RE.match(line)
+        or THEMATIC_BREAK_RE.fullmatch(line)
+        or line.startswith("\t")
+        or line.startswith("    ")
+    )
+
+
+def canonicalize_nonsetext_thematic_breaks(text: str) -> str:
+    """Keep a hyphen thematic break from being mistaken for a Setext underline."""
+    out: list[str] = []
+    previous_content: str | None = None
+
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+        match = SETEXT_H2_LINE_RE.fullmatch(content)
+        if (
+            match is not None
+            and previous_content is not None
+            and _previous_line_interrupts_setext_paragraph(previous_content)
+        ):
+            normalized = match.group("indent") + "- - -"
+            out.append(normalized + ending)
+            previous_content = normalized
+            continue
+        out.append(raw)
+        previous_content = content
+
+    return "".join(out)
+
+
+def canonicalize_multiline_inline_comment_context(text: str) -> str:
+    """Prevent comment-closing suffixes from becoming fresh block starts mid-paragraph."""
+    out: list[str] = []
+    comment_from_paragraph = False
+    fence_char: str | None = None
+    fence_len = 0
+
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+
+        if fence_char is not None:
+            if re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*", content
+            ):
+                fence_char = None
+                fence_len = 0
+            out.append(raw)
+            continue
+
+        fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", content)
+        if fence is not None:
+            run = fence.group(1)
+            info = fence.group(2)
+            if run[0] != "`" or "`" not in info:
+                fence_char = run[0]
+                fence_len = len(run)
+                out.append(raw)
+                continue
+
+        if comment_from_paragraph:
+            close = content.find("-->")
+            if close < 0:
+                out.append(raw)
+                continue
+            suffix_start = close + 3
+            suffix = content[suffix_start:]
+            heading = ATX_SUFFIX_RE.match(suffix)
+            if heading is not None:
+                escaped_suffix = (
+                    heading.group("indent")
+                    + "\\"
+                    + suffix[len(heading.group("indent")) :]
+                )
+                content = content[:suffix_start] + escaped_suffix
+            comment_from_paragraph = False
+            out.append(content + ending)
+            continue
+
+        cursor = 0
+        while True:
+            start = content.find("<!--", cursor)
+            if start < 0:
+                break
+            close = content.find("-->", start + 4)
+            if close >= 0:
+                cursor = close + 3
+                continue
+            if content[:start].strip():
+                comment_from_paragraph = True
+            break
+        out.append(raw)
 
     return "".join(out)
 
@@ -532,12 +645,15 @@ def canonicalize_ambiguous_commit_tokens(text: str) -> str:
 
 def canonicalize_markdown(text: str, *, link_scan_document: bool) -> str:
     text = ATX_INDENT_RE.sub("", text)
+    text = canonicalize_multiline_inline_comment_context(text)
     text = canonicalize_nested_reference_definitions(text)
     text = canonicalize_type7_html_paragraph_interruptions(text)
+    text = canonicalize_nonsetext_thematic_breaks(text)
     text = canonicalize_classification_placeholders(text)
     text = canonicalize_generic_required_placeholders(text)
     text = canonicalize_ambiguous_commit_tokens(text)
     if link_scan_document:
+        text = canonicalize_angle_record_destinations(text)
         text = mask_inline_code_record_destinations(text)
         text = canonicalize_record_link_titles(text)
     return text
