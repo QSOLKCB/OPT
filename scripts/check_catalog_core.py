@@ -1335,9 +1335,12 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
 
         decoded_destination = commonmark_unescape(destination)
         rel, _separator, _fragment = decoded_destination.partition("#")
-        if rel.startswith("optimizations/"):
-            raw_label = text[i + 1 : label_close]
-            rendered_label = rendered_record_label(raw_label)
+        raw_label = text[i + 1 : label_close]
+        rendered_label = rendered_record_label(raw_label)
+        if (
+            rel.startswith("optimizations/")
+            or re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None
+        ):
             links.append((rendered_label, decoded_destination))
 
         i = link_end if link_end is not None else label_close + 1
@@ -1587,8 +1590,11 @@ def visible_html_record_links(text: str) -> list[tuple[str, str]]:
 
         decoded_href = decode_html_attribute_references(href)
         rel, _separator, _fragment = decoded_href.partition("#")
-        if rel.startswith("optimizations/"):
-            rendered_label = rendered_inline_text(text[tag.end():label_end])
+        rendered_label = rendered_inline_text(text[tag.end():label_end])
+        if (
+            rel.startswith("optimizations/")
+            or re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None
+        ):
             links.append((rendered_label, decoded_href))
 
         index = next_index
@@ -2315,11 +2321,19 @@ def source_text_has_identity(line: str, sources_root: Path) -> bool:
     return False
 
 
-def source_section_has_identity(lines: list[str]) -> bool:
+def source_section_has_identity(
+    lines: list[str],
+    document_reference_definitions: dict[str, str] | None = None,
+) -> bool:
     """Require at least one concrete, rendered provenance identity."""
     sources_root = (ROOT / "sources").resolve()
     visible = list(lines)
-    hidden_reference_lines, destinations = reference_definition_scan(visible)
+    hidden_reference_lines, local_destinations = reference_definition_scan(visible)
+    destinations = (
+        document_reference_definitions
+        if document_reference_definitions is not None
+        else local_destinations
+    )
 
     rendered_source_lines = [
         raw
@@ -2557,7 +2571,9 @@ for path in sorted(OPT_DIR.glob("*.md")):
         "## Source evidence",
         include_raw_html_source=True,
     )
-    if not source_section_has_identity(source_evidence):
+    if not source_section_has_identity(
+        source_evidence, status_definitions
+    ):
         die(
             f"{path.relative_to(ROOT)} ## Source evidence lacks a concrete source identity "
             "(URL, DOI, pinned commit, existing sources/*.md note, or repository identity)"
