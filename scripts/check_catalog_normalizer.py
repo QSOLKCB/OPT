@@ -23,6 +23,7 @@ from __future__ import annotations
 import html
 import re
 import shutil
+import string
 import subprocess
 import sys
 import tempfile
