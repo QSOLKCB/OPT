@@ -107,7 +107,10 @@ SOURCE_COMMIT_CONTEXT_RE = re.compile(
     r")$",
     re.IGNORECASE,
 )
-SOURCE_LOCAL_NOTE_RE = re.compile(r"`?(sources/[A-Za-z0-9._/-]+\.md)`?")
+SOURCE_LOCAL_NOTE_RE = re.compile(
+    r"(?<![A-Za-z0-9_./-])`?(sources/[A-Za-z0-9._/-]+\.md)`?"
+    r"(?![A-Za-z0-9_./-])"
+)
 SOURCE_REPOSITORY_RE = re.compile(
     r"`(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)`"
 )
