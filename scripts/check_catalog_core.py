@@ -457,10 +457,7 @@ def strip_nonrendering_html_regions(
                 source,
                 re.IGNORECASE,
             ):
-                if (
-                    not source.rstrip().endswith("/>")
-                    and hidden_tag not in HTML_VOID_TAGS
-                ):
+                if hidden_tag not in HTML_VOID_TAGS:
                     depth += 1
                     hidden_state = (hidden_tag, depth)
                 index = tag_match.end()
@@ -507,7 +504,7 @@ def strip_nonrendering_html_regions(
             continue
 
         out.append(text[index:tag_start])
-        if source.rstrip().endswith("/>") or tag in HTML_VOID_TAGS:
+        if tag in HTML_VOID_TAGS:
             index = tag_match.end()
             continue
 
@@ -515,6 +512,27 @@ def strip_nonrendering_html_regions(
         index = tag_match.end()
 
     return "".join(out), hidden_state
+
+
+def textarea_literal_content(
+    value: str, *, opening_line: bool
+) -> str:
+    """Return textarea raw-text content with literal angle brackets protected."""
+    source = value
+    if opening_line:
+        start = source.lower().find("<textarea")
+        if start < 0:
+            return ""
+        opener = INLINE_HTML_TAG_RE.match(source, start)
+        if opener is None:
+            return ""
+        source = source[opener.end() :]
+
+    close = re.search(r"</textarea[ \t\r\n]*>", source, re.IGNORECASE)
+    if close is not None:
+        source = source[: close.start()]
+
+    return source.replace("<", "&lt;").replace(">", "&gt;")
 
 
 def visible_nonfenced_lines(
@@ -557,37 +575,47 @@ def visible_nonfenced_lines(
         if not visible or visible[-1] != "":
             append_visible(source_index, "")
 
-    def append_raw_html_source(source_index: int, value: str) -> None:
+    def append_raw_html_source(
+        source_index: int, value: str, *, literal: bool = False
+    ) -> None:
         nonlocal raw_html_source_comment, raw_html_source_hidden_tag
         if raw_html_source is None and raw_html_source_events is None:
             return
-        rendered, raw_html_source_comment = strip_inline_html_comments(
-            value, raw_html_source_comment
-        )
-        rendered, raw_html_source_hidden_tag = strip_nonrendering_html_regions(
-            rendered,
-            raw_html_source_hidden_tag,
-            honor_backslash_escapes=False,
-        )
+        if literal:
+            rendered = value
+        else:
+            rendered, raw_html_source_comment = strip_inline_html_comments(
+                value, raw_html_source_comment
+            )
+            rendered, raw_html_source_hidden_tag = strip_nonrendering_html_regions(
+                rendered,
+                raw_html_source_hidden_tag,
+                honor_backslash_escapes=False,
+            )
         if rendered.strip():
             if raw_html_source is not None:
                 raw_html_source.append(rendered)
             if raw_html_source_events is not None:
                 raw_html_source_events.append((source_index, rendered))
 
-    def append_raw_html_text(source_index: int, value: str) -> None:
+    def append_raw_html_text(
+        source_index: int, value: str, *, literal: bool = False
+    ) -> None:
         nonlocal raw_html_comment, raw_html_hidden_tag
         if raw_html_text is None and raw_html_events is None:
             return
-        rendered, raw_html_comment = strip_inline_html_comments(
-            value, raw_html_comment
-        )
-        rendered, raw_html_hidden_tag = strip_nonrendering_html_regions(
-            rendered,
-            raw_html_hidden_tag,
-            honor_backslash_escapes=False,
-        )
-        rendered = strip_inline_html_constructs(rendered)
+        if literal:
+            rendered = value
+        else:
+            rendered, raw_html_comment = strip_inline_html_comments(
+                value, raw_html_comment
+            )
+            rendered, raw_html_hidden_tag = strip_nonrendering_html_regions(
+                rendered,
+                raw_html_hidden_tag,
+                honor_backslash_escapes=False,
+            )
+            rendered = strip_inline_html_constructs(rendered)
         if rendered.strip():
             if raw_html_text is not None:
                 raw_html_text.append(rendered)
@@ -652,18 +680,23 @@ def visible_nonfenced_lines(
                     if html_list_indent > 0
                     else block_raw
                 )
-                if (
-                    (raw_html_source is not None or raw_html_source_events is not None)
-                    and html_mode == "tag"
-                    and html_end in {"pre", "textarea"}
-                ):
-                    append_raw_html_source(source_index, html_view)
-                if (
-                    (raw_html_text is not None or raw_html_events is not None)
-                    and html_mode == "tag"
-                    and html_end in {"pre", "textarea"}
-                ):
-                    append_raw_html_text(source_index, html_view)
+                if html_mode == "tag" and html_end == "textarea":
+                    literal = textarea_literal_content(
+                        html_view, opening_line=False
+                    )
+                    if raw_html_source is not None or raw_html_source_events is not None:
+                        append_raw_html_source(
+                            source_index, literal, literal=True
+                        )
+                    if raw_html_text is not None or raw_html_events is not None:
+                        append_raw_html_text(
+                            source_index, literal, literal=True
+                        )
+                elif html_mode == "tag" and html_end == "pre":
+                    if raw_html_source is not None or raw_html_source_events is not None:
+                        append_raw_html_source(source_index, html_view)
+                    if raw_html_text is not None or raw_html_events is not None:
+                        append_raw_html_text(source_index, html_view)
 
                 if html_mode == "tag":
                     if html_end is not None and raw_html_tag_closes(html_view, html_end):
@@ -753,16 +786,29 @@ def visible_nonfenced_lines(
                     html_mode, html_end = html_start
                     html_quote_depth = quote_depth
                     html_list_indent = current_list_indent or 0
-                    if (raw_html_source is not None or raw_html_source_events is not None) and (
-                        html_mode == "blank"
-                        or (html_mode == "tag" and html_end in {"pre", "textarea"})
-                    ):
-                        append_raw_html_source(source_index, block_view)
-                    if (raw_html_text is not None or raw_html_events is not None) and (
-                        html_mode == "blank"
-                        or (html_mode == "tag" and html_end in {"pre", "textarea"})
-                    ):
-                        append_raw_html_text(source_index, block_view)
+                    if html_mode == "tag" and html_end == "textarea":
+                        literal = textarea_literal_content(
+                            block_view, opening_line=True
+                        )
+                        if raw_html_source is not None or raw_html_source_events is not None:
+                            append_raw_html_source(
+                                source_index, literal, literal=True
+                            )
+                        if raw_html_text is not None or raw_html_events is not None:
+                            append_raw_html_text(
+                                source_index, literal, literal=True
+                            )
+                    else:
+                        if (raw_html_source is not None or raw_html_source_events is not None) and (
+                            html_mode == "blank"
+                            or (html_mode == "tag" and html_end == "pre")
+                        ):
+                            append_raw_html_source(source_index, block_view)
+                        if (raw_html_text is not None or raw_html_events is not None) and (
+                            html_mode == "blank"
+                            or (html_mode == "tag" and html_end == "pre")
+                        ):
+                            append_raw_html_text(source_index, block_view)
                     if (
                         html_mode == "tag"
                         and html_end is not None
@@ -1732,8 +1778,57 @@ def extract_markdown_table(
     die(f"{context} is missing the expected Markdown table")
 
 
+def core_inline_delimiter_flanking(
+    text: str, start: int, run_len: int
+) -> tuple[bool, bool]:
+    before = text[start - 1] if start > 0 else ""
+    after_index = start + run_len
+    after = text[after_index] if after_index < len(text) else ""
+
+    before_whitespace = not before or before.isspace()
+    after_whitespace = not after or after.isspace()
+    before_punctuation = bool(before) and unicodedata.category(before).startswith("P")
+    after_punctuation = bool(after) and unicodedata.category(after).startswith("P")
+
+    left_flanking = (
+        not after_whitespace
+        and (
+            not after_punctuation
+            or before_whitespace
+            or before_punctuation
+        )
+    )
+    right_flanking = (
+        not before_whitespace
+        and (
+            not before_punctuation
+            or after_whitespace
+            or after_punctuation
+        )
+    )
+    return left_flanking, right_flanking
+
+
+def core_valid_emphasis_delimiter(
+    text: str, start: int, marker: str, *, opening: bool
+) -> bool:
+    left_flanking, right_flanking = core_inline_delimiter_flanking(
+        text, start, len(marker)
+    )
+    if marker.startswith("_"):
+        before = text[start - 1] if start > 0 else ""
+        after_index = start + len(marker)
+        after = text[after_index] if after_index < len(text) else ""
+        before_punctuation = bool(before) and unicodedata.category(before).startswith("P")
+        after_punctuation = bool(after) and unicodedata.category(after).startswith("P")
+        if opening:
+            return left_flanking and (not right_flanking or before_punctuation)
+        return right_flanking and (not left_flanking or after_punctuation)
+    return left_flanking if opening else right_flanking
+
+
 def unwrap_outer_formatting(value: str, wrappers: tuple[str, ...]) -> str:
-    """Remove only balanced formatting that wraps the complete value."""
+    """Remove only complete formatting whose delimiters are valid Markdown."""
     result = value.strip()
     changed = True
     while changed:
@@ -1743,6 +1838,12 @@ def unwrap_outer_formatting(value: str, wrappers: tuple[str, ...]) -> str:
                 len(result) > 2 * len(marker)
                 and result.startswith(marker)
                 and result.endswith(marker)
+                and core_valid_emphasis_delimiter(
+                    result, 0, marker, opening=True
+                )
+                and core_valid_emphasis_delimiter(
+                    result, len(result) - len(marker), marker, opening=False
+                )
             ):
                 result = result[len(marker) : -len(marker)].strip()
                 changed = True
@@ -2283,7 +2384,13 @@ def source_note_has_identity(path: Path, sources_root: Path) -> bool:
         markdown_source_lines(text),
         raw_html_source=raw_html_source,
     )
-    raw_source = "\n".join((*visible, *raw_html_source))
+    hidden_reference_lines, destinations = reference_definition_scan(visible)
+    rendered_visible = [
+        raw
+        for index, raw in enumerate(visible)
+        if index not in hidden_reference_lines
+    ]
+    raw_source = "\n".join((*rendered_visible, *raw_html_source))
     source, _hidden_tag = strip_nonrendering_html_regions(
         raw_source,
         None,
@@ -2299,13 +2406,27 @@ def source_note_has_identity(path: Path, sources_root: Path) -> bool:
     if source_text_has_direct_identity(rendered):
         return True
 
-    return any(
+    if any(
         has_substantive_rendered_text(label)
         and source_text_has_direct_identity(
             commonmark_unescape_outside_code_spans(destination)
         )
         for label, destination in (*html_links, *inline_links)
-    )
+    ):
+        return True
+
+    for reference, label in used_reference_links(source):
+        if not has_substantive_rendered_text(label):
+            continue
+        destination = destinations.get(reference)
+        if destination is None:
+            continue
+        if source_text_has_direct_identity(
+            commonmark_unescape_outside_code_spans(destination)
+        ):
+            return True
+
+    return False
 
 
 def source_text_has_identity(line: str, sources_root: Path) -> bool:
