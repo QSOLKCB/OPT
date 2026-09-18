@@ -65,7 +65,7 @@ def _normalized_reference_label(label: str) -> str:
 
 
 def _reference_definition_source_lines(text: str) -> list[str]:
-    """Return lines where a CommonMark reference definition can actually parse."""
+    """Return source lines outside fenced code while retaining continuations."""
     lines: list[str] = []
     fence_char: str | None = None
     fence_len = 0
@@ -81,45 +81,155 @@ def _reference_definition_source_lines(text: str) -> list[str]:
                 fence_len = 0
             continue
 
-        if raw.startswith("\t") or raw.startswith("    "):
-            continue
-
-        opener = REFERENCE_FENCE_OPEN_RE.match(raw)
-        if opener is not None:
-            run = opener.group(1)
-            info = opener.group(2)
-            if run[0] != "`" or "`" not in info:
-                fence_char = run[0]
-                fence_len = len(run)
-                continue
+        if not (raw.startswith("\t") or raw.startswith("    ")):
+            opener = REFERENCE_FENCE_OPEN_RE.match(raw)
+            if opener is not None:
+                run = opener.group(1)
+                info = opener.group(2)
+                if run[0] != chr(96) or chr(96) not in info:
+                    fence_char = run[0]
+                    fence_len = len(run)
+                    continue
 
         lines.append(raw)
 
     return lines
 
 
+def _parse_reference_title(value: str) -> bool:
+    """Return whether value is exactly one CommonMark-style reference title."""
+    value = value.strip()
+    if len(value) < 2:
+        return False
+    opener = value[0]
+    if opener not in ('"', "'", "("):
+        return False
+    closer = ")" if opener == "(" else opener
+    if value[-1] != closer:
+        return False
+    inner = value[1:-1]
+    escaped = False
+    for char in inner:
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == closer:
+            return False
+    return True
+
+
+def _parse_reference_destination_and_tail(value: str) -> tuple[str, str] | None:
+    """Parse one reference destination and return destination plus trailing source."""
+    source = value.lstrip(" \t")
+    if not source:
+        return None
+
+    if source.startswith("<"):
+        escaped = False
+        for index in range(1, len(source)):
+            char = source[index]
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == ">":
+                return source[1:index], source[index + 1 :]
+            if char == "<":
+                return None
+        return None
+
+    index = 0
+    depth = 0
+    while index < len(source):
+        char = source[index]
+        if char == "\\" and index + 1 < len(source):
+            index += 2
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        elif char in " \t" and depth == 0:
+            break
+        elif char in "<>" or ord(char) < 0x20:
+            return None
+        index += 1
+    if index == 0 or depth != 0:
+        return None
+    return source[:index], source[index:]
+
+
+def _reference_entries(text: str) -> list[tuple[str, str]]:
+    """Parse rendered CommonMark reference definitions in source order."""
+    lines = _reference_definition_source_lines(text)
+    entries: list[tuple[str, str]] = []
+    prefix_re = re.compile(
+        r"^ {0,3}\[(?P<label>(?:\\.|[^\[\]\\])+)\]:[ \t]*(?P<rest>.*)$"
+    )
+    index = 0
+
+    while index < len(lines):
+        match = prefix_re.fullmatch(lines[index])
+        if match is None:
+            index += 1
+            continue
+
+        label = match.group("label")
+        rest = match.group("rest")
+        consumed = 1
+
+        if not rest:
+            if index + 1 >= len(lines):
+                index += 1
+                continue
+            continuation = lines[index + 1]
+            if not re.match(r"^ {1,3}\S", continuation):
+                index += 1
+                continue
+            rest = continuation.lstrip(" ")
+            consumed += 1
+
+        parsed = _parse_reference_destination_and_tail(rest)
+        if parsed is None:
+            index += consumed
+            continue
+
+        destination, tail = parsed
+        tail = tail.strip()
+        if tail:
+            if not _parse_reference_title(tail):
+                index += consumed
+                continue
+        elif index + consumed < len(lines):
+            possible_title = lines[index + consumed]
+            if re.match(r"^ {1,3}\S", possible_title) and _parse_reference_title(
+                possible_title.strip()
+            ):
+                consumed += 1
+
+        entries.append((label, re.sub(r"\\(.)", r"\1", destination)))
+        index += consumed
+
+    return entries
+
+
 def _reference_definitions(text: str) -> set[str]:
-    definitions: set[str] = set()
-    for raw in _reference_definition_source_lines(text):
-        match = REFERENCE_DEFINITION_RE.match(raw)
-        if match is not None:
-            definitions.add(_normalized_reference_label(match.group("label")))
-    return definitions
+    return {
+        _normalized_reference_label(label)
+        for label, _destination in _reference_entries(text)
+    }
 
 
 def _reference_destinations(text: str) -> dict[str, str]:
-    """Collect rendered reference destinations used by OPT record links."""
+    """Collect the first rendered destination for each normalized label."""
     destinations: dict[str, str] = {}
-    for raw in _reference_definition_source_lines(text):
-        match = REFERENCE_DEFINITION_DEST_RE.match(raw)
-        if match is None:
-            continue
-        destination = match.group("destination")
-        if destination.startswith("<") and destination.endswith(">"):
-            destination = destination[1:-1]
-        destination = re.sub(r"\\(.)", r"\1", destination)
-        normalized_label = _normalized_reference_label(match.group("label"))
-        destinations.setdefault(normalized_label, destination)
+    for label, destination in _reference_entries(text):
+        destinations.setdefault(_normalized_reference_label(label), destination)
     return destinations
 
 
@@ -243,28 +353,56 @@ def canonicalize_uncontextualized_repository_tokens(text: str) -> str:
 
     out: list[str] = []
     in_source_evidence = False
+    repository_continuation_indent: int | None = None
+
     for raw in text.splitlines(keepends=True):
         content = raw.rstrip("\r\n")
         ending = raw[len(content) :]
 
         if content == "## Source evidence":
             in_source_evidence = True
+            repository_continuation_indent = None
             out.append(raw)
             continue
         if ATX_LEVEL_1_OR_2_RE.match(content):
             in_source_evidence = False
+            repository_continuation_indent = None
             out.append(raw)
             continue
 
-        if in_source_evidence and not REPOSITORY_CONTEXT_RE.search(content):
-            content = BACKTICK_SLASH_IDENTIFIER_RE.sub(
-                lambda match: f"'{match.group('left')}/{match.group('right')}'",
-                content,
-            )
-            out.append(content + ending)
+        if not in_source_evidence:
+            out.append(raw)
             continue
 
-        out.append(raw)
+        if not content.strip():
+            repository_continuation_indent = None
+            out.append(raw)
+            continue
+
+        leading = len(content) - len(content.lstrip(" "))
+        has_repository_context = REPOSITORY_CONTEXT_RE.search(content) is not None
+        continuation_has_context = (
+            repository_continuation_indent is not None
+            and leading >= repository_continuation_indent
+        )
+
+        if has_repository_context:
+            repository_continuation_indent = (
+                leading + 2 if content.rstrip().endswith(":") else None
+            )
+            out.append(raw)
+            continue
+
+        if continuation_has_context:
+            out.append(raw)
+            continue
+
+        repository_continuation_indent = None
+        content = BACKTICK_SLASH_IDENTIFIER_RE.sub(
+            lambda match: f"'{match.group('left')}/{match.group('right')}'",
+            content,
+        )
+        out.append(content + ending)
 
     return "".join(out)
 
