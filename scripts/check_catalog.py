@@ -668,20 +668,23 @@ def _render_reference_aware_candidate(value: str, definitions: set[str]) -> str:
 
 
 def _unwrap_balanced_formatting(value: str) -> str:
-    """Remove only formatting markers that wrap the complete status category."""
+    """Render only syntactically valid Markdown formatting in a status category."""
     result = value.strip()
     changed = True
     while changed:
         changed = False
-        for marker in STATUS_WRAPPERS:
-            if (
-                len(result) > 2 * len(marker)
-                and result.startswith(marker)
-                and result.endswith(marker)
-            ):
-                result = result[len(marker) : -len(marker)].strip()
-                changed = True
-                break
+
+        code_rendered = normalizer._unwrap_valid_code_span(result)
+        if code_rendered != result:
+            result = code_rendered.strip()
+            changed = True
+            continue
+
+        formatted = normalizer._strip_valid_inline_formatting(result)
+        if formatted != result:
+            result = formatted.strip()
+            changed = True
+
     return result
 
 
