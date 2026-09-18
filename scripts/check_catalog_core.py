@@ -535,6 +535,36 @@ def textarea_literal_content(
     return source.replace("<", "&lt;").replace(">", "&gt;")
 
 
+def render_raw_html_text_node(value: str) -> str:
+    """Render raw HTML text while preserving heading-only structure."""
+    stripped = value.strip()
+    opener = INLINE_HTML_TAG_RE.match(stripped)
+    if opener is not None:
+        opener_source = opener.group(0)
+        heading = re.match(
+            r"<h(?P<level>[1-6])(?:[ \t\r\n/>]|$)",
+            opener_source,
+            re.IGNORECASE,
+        )
+        if heading is not None:
+            level = int(heading.group("level"))
+            close = re.search(
+                rf"</h{level}[ \t\r\n]*>",
+                stripped[opener.end() :],
+                re.IGNORECASE,
+            )
+            if close is not None:
+                close_start = opener.end() + close.start()
+                close_end = opener.end() + close.end()
+                if not stripped[close_end:].strip():
+                    body = strip_inline_html_constructs(
+                        stripped[opener.end() : close_start]
+                    ).strip()
+                    return f"{'#' * level} {body}" if body else "#" * level
+
+    return strip_inline_html_constructs(value)
+
+
 def visible_nonfenced_lines(
     lines: list[str],
     raw_html_text: list[str] | None = None,
@@ -615,7 +645,7 @@ def visible_nonfenced_lines(
                 raw_html_hidden_tag,
                 honor_backslash_escapes=False,
             )
-            rendered = strip_inline_html_constructs(rendered)
+            rendered = render_raw_html_text_node(rendered)
         if rendered.strip():
             if raw_html_text is not None:
                 raw_html_text.append(rendered)
@@ -2773,6 +2803,27 @@ if missing_frozen:
 record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in records.items()}
 
 
+HTML_ATTRIBUTE_RE = re.compile(
+    r"""(?:^|[ \t\r\n])(?P<name>[A-Za-z_:][A-Za-z0-9_.:-]*)"""
+    r"""(?:[ \t\r\n]*=[ \t\r\n]*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)'|(?P<bare>[^ \t\r\n"'=<>\x60]+)))?""",
+    re.IGNORECASE,
+)
+
+
+def first_html_attribute_value(source: str, attribute: str) -> str | None:
+    """Return the first duplicate attribute's value, matching HTML parsing."""
+    target = attribute.casefold()
+    for match in HTML_ATTRIBUTE_RE.finditer(source):
+        if match.group("name").casefold() != target:
+            continue
+        for group in ("double", "single", "bare"):
+            value = match.group(group)
+            if value is not None:
+                return value
+        return None
+    return None
+
+
 HTML_ID_ATTR_RE = re.compile(
     r"""(?:^|[ \t\r\n])id[ \t\r\n]*=[ \t\r\n]*(?:"([^"]+)"|'([^']+)'|([^ \t\r\n"'=<>\x60]+))""",
     re.IGNORECASE,
@@ -2801,13 +2852,13 @@ def collect_explicit_html_anchors(
         if source.startswith("</"):
             continue
 
-        for match in HTML_ID_ATTR_RE.finditer(source):
-            anchor = next(value for value in match.groups() if value is not None)
+        anchor = first_html_attribute_value(source, "id")
+        if anchor:
             anchors.add(decode_html_attribute_references(anchor))
 
         if re.match(r"<a(?:[ \t\r\n]|>)", source, re.IGNORECASE):
-            for match in HTML_NAME_ATTR_RE.finditer(source):
-                anchor = next(value for value in match.groups() if value is not None)
+            anchor = first_html_attribute_value(source, "name")
+            if anchor:
                 anchors.add(decode_html_attribute_references(anchor))
     return anchors
 
@@ -2948,14 +2999,23 @@ def validate_record_fragment(
 for doc_name in ("README.md", "CATALOG.md"):
     text = (ROOT / doc_name).read_text(encoding="utf-8")
     raw_html_source: list[str] = []
-    rendered = "\n".join(
-        visible_nonfenced_lines(
-            markdown_source_lines(text),
-            raw_html_source=raw_html_source,
-        )
+    doc_visible_lines = visible_nonfenced_lines(
+        markdown_source_lines(text),
+        raw_html_source=raw_html_source,
     )
-    record_links = visible_record_links(rendered)
-    rendered_html_scan, _protected_html_code = protect_code_spans(rendered)
+    _hidden_doc_definitions, doc_reference_definitions = reference_definition_scan(
+        doc_visible_lines
+    )
+    rendered = "\n".join(doc_visible_lines)
+    rendered_link_scan, _hidden_link_state = strip_nonrendering_html_regions(
+        rendered,
+        None,
+        honor_backslash_escapes=True,
+    )
+    record_links = visible_record_links(rendered_link_scan)
+    rendered_html_scan, _protected_html_code = protect_code_spans(
+        rendered_link_scan
+    )
     record_links.extend(
         visible_html_record_links(
             rendered_html_scan, markdown_contents=True
@@ -3032,7 +3092,9 @@ for doc_name in ("README.md", "CATALOG.md"):
             die(f"README.md ## Catalog row identity mismatch for {row_id}: {rel}")
         if row_id in row_statuses:
             die(f"README.md ## Catalog has duplicate status row for {row_id}")
-        row_statuses[row_id] = normalized_status_category(raw_status)
+        row_statuses[row_id] = normalized_status_category(
+            raw_status, set(doc_reference_definitions)
+        )
 
     for record_id, expected_status in status_categories.items():
         observed_status = row_statuses.get(record_id)
