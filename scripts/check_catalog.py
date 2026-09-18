@@ -20,6 +20,12 @@ REFERENCE_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FULL_REFERENCE_LINK_RE = re.compile(
     r"^\[(?P<label>[^\]]*)\]\[(?P<reference>[^\]]*)\]$"
 )
+FULL_REFERENCE_IMAGE_RE = re.compile(
+    r"^!\[(?P<label>[^\]]*)\]\[(?P<reference>[^\]]*)\]$"
+)
+SHORT_REFERENCE_IMAGE_RE = re.compile(
+    r"^!\[(?P<label>[^\]]*)\]$"
+)
 REFERENCE_RECORD_LINK_RE = re.compile(
     r"\[(?P<label>(?:\\.|[^\]\\])+)\]\[(?P<reference>(?:\\.|[^\]\\])*)\]"
 )
@@ -648,8 +654,21 @@ def _record_destination_path(destination: str) -> str | None:
 
 
 def _render_reference_aware_candidate(value: str, definitions: set[str]) -> str:
-    """Render the placeholder-relevant subset including reference-style links."""
+    """Render the placeholder-relevant subset including reference-style links/images."""
     rendered = normalizer._render_placeholder_candidate(value)
+
+    image = FULL_REFERENCE_IMAGE_RE.fullmatch(rendered)
+    if image is not None:
+        label = image.group("label")
+        reference_label = image.group("reference") or label
+        if _normalized_reference_label(reference_label) in definitions:
+            return normalizer._render_placeholder_candidate(label)
+
+    shortcut_image = SHORT_REFERENCE_IMAGE_RE.fullmatch(rendered)
+    if shortcut_image is not None:
+        label = shortcut_image.group("label")
+        if _normalized_reference_label(label) in definitions:
+            return normalizer._render_placeholder_candidate(label)
 
     reference = FULL_REFERENCE_LINK_RE.fullmatch(rendered)
     if reference is not None:
