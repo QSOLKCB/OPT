@@ -212,17 +212,24 @@ def leading_columns(value: str) -> int:
 
 
 def strip_indent_columns(value: str, columns: int) -> str:
+    """Strip exactly the requested indentation columns, preserving tab residue."""
     current = 0
     index = 0
     while index < len(value) and current < columns:
         char = value[index]
         if char == " ":
             current += 1
-        elif char == "\t":
-            current += 4 - (current % 4)
-        else:
-            break
-        index += 1
+            index += 1
+            continue
+        if char == "\t":
+            width = 4 - (current % 4)
+            if current + width > columns:
+                residual = current + width - columns
+                return (" " * residual) + value[index + 1 :]
+            current += width
+            index += 1
+            continue
+        break
     return value[index:] if current >= columns else value
 
 
@@ -687,6 +694,11 @@ def find_label_close(text: str, open_index: int) -> int | None:
         if text[i] == "\\" and i + 1 < len(text):
             i += 2
             continue
+        if text[i] == "<":
+            html_end = inline_html_construct_end(text, i)
+            if html_end is not None:
+                i = html_end
+                continue
         if text[i] == "[":
             depth += 1
         elif text[i] == "]":
@@ -913,9 +925,7 @@ def rendered_record_label(value: str) -> str:
             code_text = code_text[1:-1]
         return code_text
 
-    result = unwrap_outer_formatting(stripped, EMPHASIS_WRAPPERS)
-    result = strip_inline_html_constructs(result)
-    return commonmark_unescape(result).strip()
+    return rendered_inline_text(stripped)
 
 
 def visible_record_links(text: str) -> list[tuple[str, str]]:
@@ -1240,9 +1250,15 @@ def _reference_title_complete(value: str) -> bool:
     return True
 
 
-def reference_definition_hidden_indexes(lines: list[str]) -> set[int]:
-    """Return source indexes consumed by rendered reference definitions."""
+def normalized_reference_label(label: str) -> str:
+    """Apply CommonMark-style case/whitespace normalization to a reference label."""
+    return " ".join(commonmark_unescape(label).split()).casefold()
+
+
+def reference_definition_scan(lines: list[str]) -> tuple[set[int], dict[str, str]]:
+    """Return hidden definition indexes and their first rendered destinations."""
     hidden: set[int] = set()
+    destinations: dict[str, str] = {}
     prefix_re = re.compile(
         r"^ {0,3}\[(?P<label>(?:\\.|[^\[\]\\])+)\]:[ \t]*(?P<rest>.*)$"
     )
@@ -1285,7 +1301,7 @@ def reference_definition_hidden_indexes(lines: list[str]) -> set[int]:
             index += 1
             continue
 
-        _destination, tail = parsed
+        destination, tail = parsed
         title = tail.strip()
         if title:
             while not _reference_title_complete(title):
@@ -1325,10 +1341,71 @@ def reference_definition_hidden_indexes(lines: list[str]) -> set[int]:
                 continue
 
         hidden.update(hidden_indexes)
+        destinations.setdefault(
+            normalized_reference_label(match.group("label")),
+            commonmark_unescape(destination),
+        )
         paragraph_open = False
         index += consumed
 
-    return hidden
+    return hidden, destinations
+
+
+def reference_definition_hidden_indexes(lines: list[str]) -> set[int]:
+    return reference_definition_scan(lines)[0]
+
+
+def reference_definition_destinations(lines: list[str]) -> dict[str, str]:
+    return reference_definition_scan(lines)[1]
+
+
+def used_reference_labels(text: str) -> set[str]:
+    """Return rendered reference labels used by full, collapsed, or shortcut links."""
+    labels: set[str] = set()
+    protected_text, _protected_code = protect_code_spans(text)
+    i = 0
+    while i < len(protected_text):
+        if protected_text[i] == "<":
+            html_end = inline_html_construct_end(protected_text, i)
+            if html_end is not None:
+                i = html_end
+                continue
+        if protected_text[i] != "[" or is_backslash_escaped(protected_text, i):
+            i += 1
+            continue
+        if (
+            i > 0
+            and protected_text[i - 1] == "!"
+            and not is_backslash_escaped(protected_text, i - 1)
+        ):
+            i += 1
+            continue
+
+        label_close = find_label_close(protected_text, i)
+        if label_close is None:
+            i += 1
+            continue
+
+        label = protected_text[i + 1 : label_close]
+        after = label_close + 1
+
+        if after < len(protected_text) and protected_text[after] == "(":
+            link_end = find_inline_link_end(protected_text, after)
+            i = link_end if link_end is not None else after + 1
+            continue
+
+        if after < len(protected_text) and protected_text[after] == "[":
+            reference_close = find_label_close(protected_text, after)
+            if reference_close is not None:
+                reference = protected_text[after + 1 : reference_close] or label
+                labels.add(normalized_reference_label(reference))
+                i = reference_close + 1
+                continue
+
+        labels.add(normalized_reference_label(label))
+        i = label_close + 1
+
+    return labels
 
 
 def is_structural_only_line(line: str) -> bool:
@@ -1365,11 +1442,32 @@ def source_commit_has_context(line: str, match: re.Match[str]) -> bool:
     return SOURCE_COMMIT_CONTEXT_RE.search(cleaned) is not None
 
 
+def source_text_has_identity(line: str, sources_root: Path) -> bool:
+    if SOURCE_URL_RE.search(line) or SOURCE_DOI_RE.search(line):
+        return True
+    if any(
+        source_commit_has_context(line, match)
+        for match in SOURCE_COMMIT_RE.finditer(line)
+    ):
+        return True
+    for match in SOURCE_LOCAL_NOTE_RE.finditer(line):
+        candidate = (ROOT / match.group(1)).resolve()
+        try:
+            candidate.relative_to(sources_root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return True
+    return SOURCE_REPOSITORY_RE.search(line) is not None
+
+
 def source_section_has_identity(lines: list[str]) -> bool:
     """Require at least one concrete, rendered provenance identity."""
     sources_root = (ROOT / "sources").resolve()
     visible = visible_nonfenced_lines(lines)
-    hidden_reference_lines = reference_definition_hidden_indexes(visible)
+    hidden_reference_lines, destinations = reference_definition_scan(visible)
+
+    rendered_source_lines: list[str] = []
     for index, raw in enumerate(visible):
         if index in hidden_reference_lines:
             continue
@@ -1377,23 +1475,19 @@ def source_section_has_identity(lines: list[str]) -> bool:
         line = commonmark_unescape_outside_code_spans(line)
         if not line or SOURCE_PLACEHOLDER_RE.fullmatch(line):
             continue
-        if SOURCE_URL_RE.search(line) or SOURCE_DOI_RE.search(line):
+        rendered_source_lines.append(raw)
+        if source_text_has_identity(line, sources_root):
             return True
-        if any(
-            source_commit_has_context(line, match)
-            for match in SOURCE_COMMIT_RE.finditer(line)
-        ):
+
+    used_labels = used_reference_labels("\n".join(rendered_source_lines))
+    for label in used_labels:
+        destination = destinations.get(label)
+        if destination is None:
+            continue
+        rendered_destination = commonmark_unescape_outside_code_spans(destination)
+        if source_text_has_identity(rendered_destination, sources_root):
             return True
-        for match in SOURCE_LOCAL_NOTE_RE.finditer(line):
-            candidate = (ROOT / match.group(1)).resolve()
-            try:
-                candidate.relative_to(sources_root)
-            except ValueError:
-                continue
-            if candidate.is_file():
-                return True
-        if SOURCE_REPOSITORY_RE.search(line):
-            return True
+
     return False
 
 
