@@ -1214,6 +1214,66 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
     return links
 
 
+def decode_html_attribute_references(value: str) -> str:
+    """Decode character references using HTML attribute-value state rules."""
+    out: list[str] = []
+    index = 0
+
+    while index < len(value):
+        if value[index] != "&":
+            out.append(value[index])
+            index += 1
+            continue
+
+        numeric = re.match(r"&#(?:[xX][0-9A-Fa-f]+|[0-9]+);?", value[index:])
+        if numeric is not None:
+            token = numeric.group(0)
+            out.append(html.unescape(token))
+            index += len(token)
+            continue
+
+        run = re.match(r"&(?P<name>[A-Za-z0-9]+)(?P<semi>;?)", value[index:])
+        if run is None:
+            out.append("&")
+            index += 1
+            continue
+
+        name = run.group("name")
+        matched_key: str | None = None
+        matched_len = 0
+        if run.group("semi"):
+            key = name + ";"
+            if key in HTML5_ENTITIES:
+                matched_key = key
+                matched_len = len(name) + 1
+
+        if matched_key is None:
+            for length in range(len(name), 0, -1):
+                key = name[:length]
+                if key in HTML5_ENTITIES:
+                    matched_key = key
+                    matched_len = length
+                    break
+
+        if matched_key is None:
+            out.append("&")
+            index += 1
+            continue
+
+        consumed_end = index + 1 + matched_len
+        if not matched_key.endswith(";"):
+            next_char = value[consumed_end : consumed_end + 1]
+            if next_char and (next_char.isalnum() or next_char == "="):
+                out.append("&")
+                index += 1
+                continue
+
+        out.append(HTML5_ENTITIES[matched_key])
+        index = consumed_end
+
+    return "".join(out)
+
+
 HTML_HREF_RE = re.compile(
     r"""(?:^|[ \t\r\n])href[ \t\r\n]*=[ \t\r\n]*(?:"([^"]*)"|'([^']*)'|([^ \t\r\n"'=<>\x60]+))""",
     re.IGNORECASE,
@@ -1849,7 +1909,8 @@ def valid_repository_identity(owner: str, repo: str) -> bool:
     return owner.lower() not in placeholder_parts and repo.lower() not in placeholder_parts
 
 
-def source_text_has_identity(line: str, sources_root: Path) -> bool:
+def source_text_has_direct_identity(line: str) -> bool:
+    """Return whether rendered text contains concrete provenance without local-note indirection."""
     if any(valid_http_source_url(match.group(0)) for match in SOURCE_URL_RE.finditer(line)):
         return True
     if SOURCE_DOI_RE.search(line):
@@ -1859,14 +1920,6 @@ def source_text_has_identity(line: str, sources_root: Path) -> bool:
         for match in SOURCE_COMMIT_RE.finditer(line)
     ):
         return True
-    for match in SOURCE_LOCAL_NOTE_RE.finditer(line):
-        candidate = (ROOT / match.group(1)).resolve()
-        try:
-            candidate.relative_to(sources_root)
-        except ValueError:
-            continue
-        if candidate.is_file():
-            return True
     if any(
         valid_repository_identity(match.group("owner"), match.group("repo"))
         for match in SOURCE_REPOSITORY_RE.finditer(line)
@@ -1876,6 +1929,58 @@ def source_text_has_identity(line: str, sources_root: Path) -> bool:
         valid_repository_identity(match.group("owner"), match.group("repo"))
         for match in SOURCE_REPOSITORY_CONTEXT_RE.finditer(line)
     )
+
+
+def source_note_has_identity(path: Path, sources_root: Path) -> bool:
+    """Require an existing local source note to contain its own concrete provenance."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return False
+
+    raw_html_source: list[str] = []
+    visible = visible_nonfenced_lines(
+        markdown_source_lines(text),
+        raw_html_source=raw_html_source,
+    )
+    raw_source = "\n".join((*visible, *raw_html_source))
+    source, _hidden_tag = strip_nonrendering_html_regions(
+        raw_source,
+        None,
+        honor_backslash_escapes=True,
+    )
+
+    html_destinations = html_anchor_hrefs(source)
+    inline_destinations = inline_link_destinations(source)
+    rendered = commonmark_unescape_outside_code_spans(
+        strip_inline_links(strip_inline_html_constructs(source))
+    )
+
+    if source_text_has_direct_identity(rendered):
+        return True
+
+    return any(
+        source_text_has_direct_identity(
+            commonmark_unescape_outside_code_spans(destination)
+        )
+        for destination in (*html_destinations, *inline_destinations)
+    )
+
+
+def source_text_has_identity(line: str, sources_root: Path) -> bool:
+    if source_text_has_direct_identity(line):
+        return True
+
+    for match in SOURCE_LOCAL_NOTE_RE.finditer(line):
+        candidate = (ROOT / match.group(1)).resolve()
+        try:
+            candidate.relative_to(sources_root)
+        except ValueError:
+            continue
+        if candidate.is_file() and source_note_has_identity(candidate, sources_root):
+            return True
+
+    return False
 
 
 def source_section_has_identity(lines: list[str]) -> bool:
@@ -2093,64 +2198,6 @@ HTML_NAME_ATTR_RE = re.compile(
 )
 
 
-def decode_html_attribute_references(value: str) -> str:
-    """Decode character references using HTML attribute-value state rules."""
-    out: list[str] = []
-    index = 0
-
-    while index < len(value):
-        if value[index] != "&":
-            out.append(value[index])
-            index += 1
-            continue
-
-        numeric = re.match(r"&#(?:[xX][0-9A-Fa-f]+|[0-9]+);?", value[index:])
-        if numeric is not None:
-            token = numeric.group(0)
-            out.append(html.unescape(token))
-            index += len(token)
-            continue
-
-        run = re.match(r"&(?P<name>[A-Za-z0-9]+)(?P<semi>;?)", value[index:])
-        if run is None:
-            out.append("&")
-            index += 1
-            continue
-
-        name = run.group("name")
-        matched_key: str | None = None
-        matched_len = 0
-        if run.group("semi"):
-            key = name + ";"
-            if key in HTML5_ENTITIES:
-                matched_key = key
-                matched_len = len(name) + 1
-
-        if matched_key is None:
-            for length in range(len(name), 0, -1):
-                key = name[:length]
-                if key in HTML5_ENTITIES:
-                    matched_key = key
-                    matched_len = length
-                    break
-
-        if matched_key is None:
-            out.append("&")
-            index += 1
-            continue
-
-        consumed_end = index + 1 + matched_len
-        if not matched_key.endswith(";"):
-            next_char = value[consumed_end : consumed_end + 1]
-            if next_char and (next_char.isalnum() or next_char == "="):
-                out.append("&")
-                index += 1
-                continue
-
-        out.append(HTML5_ENTITIES[matched_key])
-        index = consumed_end
-
-    return "".join(out)
 
 
 def collect_explicit_html_anchors(
