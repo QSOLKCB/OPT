@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import html
 import re
+import string
 from collections import Counter
 from pathlib import Path
 
@@ -172,14 +173,41 @@ def is_indented_code_line(raw: str) -> bool:
     return False
 
 
-def strip_blockquote_prefixes(raw: str) -> str:
-    """Strip active block-quote markers for block-level parsing only."""
+def blockquote_depth_and_content(raw: str) -> tuple[int, str]:
+    """Return active block-quote depth and content after those markers."""
     result = raw
+    depth = 0
     while True:
         match = re.match(r"^ {0,3}>[ \t]?", result)
         if match is None:
-            return result
+            return depth, result
         result = result[match.end() :]
+        depth += 1
+
+
+def strip_blockquote_prefixes(raw: str) -> str:
+    """Strip active block-quote markers for block-level parsing only."""
+    _depth, result = blockquote_depth_and_content(raw)
+    return result
+
+
+def commonmark_unescape(value: str) -> str:
+    """Unescape only backslash-escapable ASCII punctuation."""
+    out: list[str] = []
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if (
+            char == "\\"
+            and index + 1 < len(value)
+            and value[index + 1] in string.punctuation
+        ):
+            out.append(value[index + 1])
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def strip_inline_html_comments(raw: str, in_comment: bool) -> tuple[str, bool]:
@@ -233,8 +261,8 @@ def raw_html_tag_closes(raw: str, tag: str) -> bool:
     return re.search(rf"</{re.escape(tag)}>", raw, re.IGNORECASE) is not None
 
 
-def _line_keeps_paragraph_open(raw: str) -> bool:
-    """Approximate block starts that terminate an open CommonMark paragraph."""
+def _line_keeps_paragraph_open(raw: str, was_open: bool = False) -> bool:
+    """Approximate whether this source line leaves a paragraph open."""
     stripped = raw.strip()
     if not stripped:
         return False
@@ -243,7 +271,7 @@ def _line_keeps_paragraph_open(raw: str) -> bool:
     if THEMATIC_BREAK_RE.fullmatch(stripped):
         return False
     if LINK_REFERENCE_DEFINITION_RE.fullmatch(stripped):
-        return False
+        return was_open
     if LIST_MARKER_ONLY_RE.fullmatch(stripped) or stripped == ">":
         return False
     return True
@@ -254,9 +282,11 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
     visible: list[str] = []
     fence_char: str | None = None
     fence_len = 0
+    fence_quote_depth = 0
     inline_comment = False
     html_mode: str | None = None
     html_end: str | None = None
+    html_quote_depth = 0
     paragraph_open = False
 
     def boundary() -> None:
@@ -264,37 +294,53 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
             visible.append("")
 
     for raw in lines:
-        block_raw = strip_blockquote_prefixes(raw)
+        quote_depth, block_raw = blockquote_depth_and_content(raw)
 
         if fence_char is not None:
-            paragraph_open = False
-            close = re.fullmatch(
-                rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*",
-                block_raw,
-            )
-            if close is not None:
+            if fence_quote_depth > 0 and quote_depth < fence_quote_depth:
                 fence_char = None
                 fence_len = 0
-            continue
+                fence_quote_depth = 0
+                boundary()
+            else:
+                paragraph_open = False
+                close = re.fullmatch(
+                    rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*",
+                    block_raw,
+                )
+                if close is not None:
+                    fence_char = None
+                    fence_len = 0
+                    fence_quote_depth = 0
+                continue
 
         if html_mode is not None:
-            paragraph_open = False
-            if html_mode == "tag":
-                if html_end is not None and raw_html_tag_closes(block_raw, html_end):
-                    html_mode = None
-                    html_end = None
-                continue
-            if html_mode == "token":
-                if html_end is not None and html_end in block_raw:
-                    html_mode = None
-                    html_end = None
-                continue
-            if html_mode == "blank":
-                if block_raw.strip() == "":
-                    html_mode = None
-                    html_end = None
-                    boundary()
-                continue
+            if html_quote_depth > 0 and quote_depth < html_quote_depth:
+                html_mode = None
+                html_end = None
+                html_quote_depth = 0
+                boundary()
+            else:
+                paragraph_open = False
+                if html_mode == "tag":
+                    if html_end is not None and raw_html_tag_closes(block_raw, html_end):
+                        html_mode = None
+                        html_end = None
+                        html_quote_depth = 0
+                    continue
+                if html_mode == "token":
+                    if html_end is not None and html_end in block_raw:
+                        html_mode = None
+                        html_end = None
+                        html_quote_depth = 0
+                    continue
+                if html_mode == "blank":
+                    if block_raw.strip() == "":
+                        html_mode = None
+                        html_end = None
+                        html_quote_depth = 0
+                        boundary()
+                    continue
 
         was_paragraph_open = paragraph_open
 
@@ -317,6 +363,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                         paragraph_open = False
                         fence_char = run[0]
                         fence_len = len(run)
+                        fence_quote_depth = quote_depth
                         boundary()
                         continue
 
@@ -325,6 +372,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     paragraph_open = False
                     boundary()
                     html_mode, html_end = html_start
+                    html_quote_depth = quote_depth
                     if (
                         html_mode == "tag"
                         and html_end is not None
@@ -332,6 +380,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     ):
                         html_mode = None
                         html_end = None
+                        html_quote_depth = 0
                     elif (
                         html_mode == "token"
                         and html_end is not None
@@ -339,6 +388,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     ):
                         html_mode = None
                         html_end = None
+                        html_quote_depth = 0
                     continue
 
                 raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
@@ -356,7 +406,9 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
             if is_indented_code_line(parse_view) and was_paragraph_open:
                 paragraph_open = True
             else:
-                paragraph_open = _line_keeps_paragraph_open(parse_view)
+                paragraph_open = _line_keeps_paragraph_open(
+                    parse_view, was_paragraph_open
+                )
         elif not inline_comment and raw == "":
             boundary()
             paragraph_open = False
@@ -642,6 +694,11 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
     links: list[tuple[str, str]] = []
     i = 0
     while i < len(text):
+        if text[i] == "<":
+            html_match = INLINE_HTML_TAG_RE.match(text, i)
+            if html_match is not None:
+                i = html_match.end()
+                continue
         if text[i] != "[" or is_backslash_escaped(text, i):
             i += 1
             continue
@@ -673,7 +730,7 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
             i += 1
             continue
 
-        links.append((rendered_label, re.sub(r"\\(.)", r"\1", destination)))
+        links.append((rendered_label, commonmark_unescape(destination)))
         link_end = find_inline_link_end(text, label_close + 1)
         i = link_end if link_end is not None else label_close + 1
 
@@ -827,11 +884,35 @@ def unwrap_markdown_emphasis(cell: str) -> str:
 
 
 def parse_record_link_cell(cell: str, context: str) -> tuple[str, str]:
-    value = unwrap_markdown_emphasis(cell)
-    match = RECORD_LINK_CELL_RE.fullmatch(value)
-    if match is None:
+    value = unwrap_markdown_emphasis(cell).strip()
+    if not value.startswith("["):
         die(f"{context} has invalid record-link cell: {cell}")
-    return match.group(1), match.group(2)
+
+    label_close = find_label_close(value, 0)
+    if (
+        label_close is None
+        or label_close + 1 >= len(value)
+        or value[label_close + 1] != "("
+    ):
+        die(f"{context} has invalid record-link cell: {cell}")
+
+    link_end = find_inline_link_end(value, label_close + 1)
+    if link_end is None or link_end != len(value):
+        die(f"{context} has invalid record-link cell: {cell}")
+
+    rendered_label = rendered_inline_text(value[1:label_close])
+    if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is None:
+        die(f"{context} has invalid record-link label: {cell}")
+
+    destination = inline_link_destination(value, label_close + 1)
+    if destination is None:
+        die(f"{context} has invalid record-link destination: {cell}")
+
+    destination = commonmark_unescape(destination)
+    rel, _separator, _fragment = destination.partition("#")
+    if not rel.startswith("optimizations/") or not rel.endswith(".md"):
+        die(f"{context} has invalid record-link destination: {cell}")
+    return rendered_label, rel
 
 
 def rendered_inline_text(value: str) -> str:
@@ -842,7 +923,7 @@ def rendered_inline_text(value: str) -> str:
     text = REFERENCE_LINK_RE.sub(lambda m: m.group(1), text)
     text = INLINE_HTML_TAG_RE.sub("", text)
     text = re.sub(r"[`*_~]", "", text)
-    text = re.sub(r"\\(.)", r"\1", text)
+    text = commonmark_unescape(text)
     for token, code_text in protected_code.items():
         text = text.replace(token, code_text)
     return html.unescape(text).strip()
