@@ -940,22 +940,138 @@ def _render_placeholder_with_following_lines(
     return _render_placeholder_candidate(source)
 
 
+def _inline_delimiter_flanking(
+    text: str, start: int, run_len: int
+) -> tuple[bool, bool]:
+    """Return CommonMark-style left/right flanking for one delimiter run."""
+    before = text[start - 1] if start > 0 else ""
+    after_index = start + run_len
+    after = text[after_index] if after_index < len(text) else ""
+
+    before_whitespace = not before or before.isspace()
+    after_whitespace = not after or after.isspace()
+    before_punctuation = bool(before) and before in string.punctuation
+    after_punctuation = bool(after) and after in string.punctuation
+
+    left_flanking = (
+        not after_whitespace
+        and (
+            not after_punctuation
+            or before_whitespace
+            or before_punctuation
+        )
+    )
+    right_flanking = (
+        not before_whitespace
+        and (
+            not before_punctuation
+            or after_whitespace
+            or after_punctuation
+        )
+    )
+    return left_flanking, right_flanking
+
+
+def _valid_emphasis_delimiter(
+    text: str, start: int, marker: str, *, opening: bool
+) -> bool:
+    left_flanking, right_flanking = _inline_delimiter_flanking(
+        text, start, len(marker)
+    )
+    if marker.startswith("_"):
+        before = text[start - 1] if start > 0 else ""
+        after_index = start + len(marker)
+        after = text[after_index] if after_index < len(text) else ""
+        before_punctuation = bool(before) and before in string.punctuation
+        after_punctuation = bool(after) and after in string.punctuation
+        if opening:
+            return left_flanking and (not right_flanking or before_punctuation)
+        return right_flanking and (not left_flanking or after_punctuation)
+    return left_flanking if opening else right_flanking
+
+
+def _strip_valid_inline_formatting(text: str) -> str:
+    """Remove rendered emphasis/strong/strike delimiters, including partial spans."""
+    markers = ("**", "__", "~~", "*", "_")
+    changed = True
+    while changed:
+        changed = False
+        for marker in markers:
+            search_from = 0
+            while True:
+                start = text.find(marker, search_from)
+                if start < 0:
+                    break
+                if not _valid_emphasis_delimiter(
+                    text, start, marker, opening=True
+                ):
+                    search_from = start + len(marker)
+                    continue
+
+                close_search = start + len(marker)
+                while True:
+                    end = text.find(marker, close_search)
+                    if end < 0:
+                        break
+                    if _valid_emphasis_delimiter(
+                        text, end, marker, opening=False
+                    ):
+                        inner = text[start + len(marker) : end]
+                        text = text[:start] + inner + text[end + len(marker) :]
+                        changed = True
+                        break
+                    close_search = end + len(marker)
+
+                if changed:
+                    break
+                search_from = start + len(marker)
+
+            if changed:
+                break
+    return text
+
+
+def _unwrap_valid_code_span(value: str) -> str:
+    """Render a complete code span only when its delimiter run actually closes."""
+    if not value.startswith(chr(96)):
+        return value
+    run_len = _backtick_run_length(value, 0)
+    marker = chr(96) * run_len
+    if (
+        run_len == 0
+        or len(value) < 2 * run_len
+        or not value.endswith(marker)
+        or marker in value[run_len : len(value) - run_len]
+    ):
+        return value
+    code_text = value[run_len : len(value) - run_len].replace("\n", " ")
+    if (
+        len(code_text) >= 2
+        and code_text.startswith(" ")
+        and code_text.endswith(" ")
+        and code_text.strip()
+    ):
+        code_text = code_text[1:-1]
+    return code_text
+
+
 def _render_placeholder_candidate(value: str) -> str:
     """Render the subset of inline Markdown relevant to template placeholders."""
     result = html.unescape(value.strip())
     changed = True
     while changed:
         changed = False
-        for marker in INLINE_WRAPPERS:
-            if (
-                len(result) > 2 * len(marker)
-                and result.startswith(marker)
-                and result.endswith(marker)
-            ):
-                result = result[len(marker) : -len(marker)].strip()
-                changed = True
-                break
-        if changed:
+
+        code_rendered = _unwrap_valid_code_span(result)
+        if code_rendered != result:
+            result = code_rendered.strip()
+            changed = True
+            continue
+
+        formatted = _strip_valid_inline_formatting(result)
+        if formatted != result:
+            result = formatted.strip()
+            changed = True
             continue
 
         if result.startswith("["):
