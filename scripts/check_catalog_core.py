@@ -375,6 +375,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
     html_mode: str | None = None
     html_end: str | None = None
     html_quote_depth = 0
+    html_list_indent = 0
     paragraph_open = False
 
     def boundary() -> None:
@@ -416,30 +417,45 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                 continue
 
         if html_mode is not None:
-            if html_quote_depth > 0 and quote_depth < html_quote_depth:
+            quote_ended = html_quote_depth > 0 and quote_depth < html_quote_depth
+            list_ended = (
+                html_list_indent > 0
+                and block_raw.strip()
+                and leading_columns(block_raw) < html_list_indent
+            )
+            if quote_ended or list_ended:
                 html_mode = None
                 html_end = None
                 html_quote_depth = 0
+                html_list_indent = 0
                 boundary()
             else:
                 paragraph_open = False
+                html_view = (
+                    strip_indent_columns(block_raw, html_list_indent)
+                    if html_list_indent > 0
+                    else block_raw
+                )
                 if html_mode == "tag":
-                    if html_end is not None and raw_html_tag_closes(block_raw, html_end):
+                    if html_end is not None and raw_html_tag_closes(html_view, html_end):
                         html_mode = None
                         html_end = None
                         html_quote_depth = 0
+                        html_list_indent = 0
                     continue
                 if html_mode == "token":
-                    if html_end is not None and html_end in block_raw:
+                    if html_end is not None and html_end in html_view:
                         html_mode = None
                         html_end = None
                         html_quote_depth = 0
+                        html_list_indent = 0
                     continue
                 if html_mode == "blank":
-                    if block_raw.strip() == "":
+                    if html_view.strip() == "":
                         html_mode = None
                         html_end = None
                         html_quote_depth = 0
+                        html_list_indent = 0
                         boundary()
                     continue
 
@@ -491,6 +507,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     boundary()
                     html_mode, html_end = html_start
                     html_quote_depth = quote_depth
+                    html_list_indent = current_list_indent or 0
                     if (
                         html_mode == "tag"
                         and html_end is not None
@@ -499,6 +516,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                         html_mode = None
                         html_end = None
                         html_quote_depth = 0
+                        html_list_indent = 0
                     elif (
                         html_mode == "token"
                         and html_end is not None
@@ -507,6 +525,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                         html_mode = None
                         html_end = None
                         html_quote_depth = 0
+                        html_list_indent = 0
                     continue
 
                 raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
@@ -817,23 +836,35 @@ def inline_link_destination(text: str, open_paren: int) -> str | None:
     return None
 
 
+def inline_html_crosses_paragraph_boundary(text: str, start: int, end: int) -> bool:
+    """Return whether a candidate inline HTML construct crosses a blank line."""
+    return re.search(r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)", text[start:end]) is not None
+
+
 def inline_html_construct_end(text: str, index: int) -> int | None:
-    """Return end of one rendered-inline-HTML source construct."""
+    """Return end of one rendered-inline-HTML source construct within one paragraph."""
     if index >= len(text) or text[index] != "<" or is_backslash_escaped(text, index):
         return None
+
+    end: int | None = None
     if text.startswith("<!--", index):
-        return inline_html_comment_end(text, index)
-    if text.startswith("<?", index):
-        end = text.find("?>", index + 2)
-        return None if end < 0 else end + 2
-    if text.startswith("<![CDATA[", index):
-        end = text.find("]]>", index + 9)
-        return None if end < 0 else end + 3
-    if re.match(r"<![A-Z]", text[index:]):
-        end = text.find(">", index + 2)
-        return None if end < 0 else end + 1
-    match = INLINE_HTML_TAG_RE.match(text, index)
-    return match.end() if match is not None else None
+        end = inline_html_comment_end(text, index)
+    elif text.startswith("<?", index):
+        close = text.find("?>", index + 2)
+        end = None if close < 0 else close + 2
+    elif text.startswith("<![CDATA[", index):
+        close = text.find("]]>", index + 9)
+        end = None if close < 0 else close + 3
+    elif re.match(r"<![A-Z]", text[index:]):
+        close = text.find(">", index + 2)
+        end = None if close < 0 else close + 1
+    else:
+        match = INLINE_HTML_TAG_RE.match(text, index)
+        end = match.end() if match is not None else None
+
+    if end is None or inline_html_crosses_paragraph_boundary(text, index, end):
+        return None
+    return end
 
 
 def strip_inline_html_constructs(text: str) -> str:
@@ -887,6 +918,16 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
             and text[i - 1] == "!"
             and not is_backslash_escaped(text, i - 1)
         ):
+            image_label_close = find_label_close(text, i)
+            if (
+                image_label_close is not None
+                and image_label_close + 1 < len(text)
+                and text[image_label_close + 1] == "("
+            ):
+                image_end = find_inline_link_end(text, image_label_close + 1)
+                if image_end is not None:
+                    i = image_end
+                    continue
             i += 1
             continue
 
