@@ -64,7 +64,7 @@ INLINE_HTML_TAG_RE = re.compile(
 )
 HTML_HIDDEN_ATTR_RE = re.compile(
     r"(?:^|[ \t\r\n])hidden"
-    r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\\\"[^\\\"]*\\\"|\'[^\']*\'|[^ \t\r\n\\\"\'=<>`]+))?"
+    r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\"[^\"]*\"|\'[^\']*\'|[^ \t\r\n\"\'=<>`]+))?"
     r"(?=[ \t\r\n/>]|$)",
     re.IGNORECASE,
 )
