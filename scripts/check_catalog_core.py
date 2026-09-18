@@ -86,7 +86,7 @@ LINK_RE = re.compile(
 RECORD_LINK_CELL_RE = re.compile(
     r"^\[(OPT-[A-Z]+-\d{3})\]\(\s*(optimizations/[^)#\s]+\.md)(?:#[^)\s]*)?\s*\)$"
 )
-ID_RE = re.compile(r"^# (OPT-[A-Z]+-\d{3}) — ")
+ID_RE = re.compile(r"^# (OPT-[A-Z]+-\d{3}) — (?P<title>.*)$")
 FILENAME_ID_RE = re.compile(r"^(OPT-[A-Z]+-\d{3})-")
 STATUS_RE = re.compile(r"^\*\*Status:\*\*\s*(.*?)\s*$")
 OPT_TOKEN_RE = re.compile(r"\bOPT-[A-Z]+-\d{3}\b")
@@ -1604,8 +1604,22 @@ def html_anchor_hrefs(text: str) -> list[str]:
     ]
 
 
-def visible_html_record_links(text: str) -> list[tuple[str, str]]:
-    """Return OPT-labelled visible raw-HTML anchors and decoded href targets."""
+def rendered_raw_html_text(value: str) -> str:
+    """Render raw-HTML text nodes without interpreting Markdown delimiters."""
+    text, _hidden_state = strip_nonrendering_html_regions(
+        value,
+        None,
+        honor_backslash_escapes=False,
+    )
+    text = preserve_html_image_alt_text(text)
+    text = strip_inline_html_constructs(text)
+    return html.unescape(text).strip()
+
+
+def visible_html_record_links(
+    text: str, *, markdown_contents: bool
+) -> list[tuple[str, str]]:
+    """Return visible HTML record links with origin-aware label rendering."""
     links: list[tuple[str, str]] = []
     index = 0
     while index < len(text):
@@ -1639,7 +1653,12 @@ def visible_html_record_links(text: str) -> list[tuple[str, str]]:
 
         decoded_href = decode_html_attribute_references(href)
         rel, _separator, _fragment = decoded_href.partition("#")
-        rendered_label = rendered_inline_text(text[tag.end():label_end])
+        label_source = text[tag.end():label_end]
+        rendered_label = (
+            rendered_inline_text(label_source)
+            if markdown_contents
+            else rendered_raw_html_text(label_source)
+        )
         if (
             rel.startswith("optimizations/")
             or re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None
@@ -2356,8 +2375,24 @@ def valid_repository_identity(owner: str, repo: str) -> bool:
 
 
 def source_url_candidate(value: str) -> str:
-    """Trim terminal prose punctuation that is not part of a rendered bare URL."""
-    return value.rstrip(".,;:!?")
+    """Trim terminal prose punctuation and unmatched closing wrappers."""
+    result = value.rstrip(".,;:!?")
+    closing_pairs = {")": "(", "]": "[", "}": "{"}
+
+    while result:
+        closer = result[-1]
+        if closer in {'"', "'"}:
+            result = result[:-1].rstrip(".,;:!?")
+            continue
+
+        opener = closing_pairs.get(closer)
+        if opener is not None and result.count(closer) > result.count(opener):
+            result = result[:-1].rstrip(".,;:!?")
+            continue
+
+        break
+
+    return result
 
 
 def source_text_has_direct_identity(line: str) -> bool:
@@ -2660,6 +2695,13 @@ for path in sorted(OPT_DIR.glob("*.md")):
     if record_id in FROZEN_V1:
         continue
 
+    record_title = match.group("title")
+    if not has_substantive_rendered_text(record_title):
+        die(
+            f"{path.relative_to(ROOT)} has empty/markup-only Optimization Name "
+            f"in its record heading"
+        )
+
     _hidden_status_definitions, status_definitions = reference_definition_scan(lines)
     status_category = normalized_status_category(
         statuses[0], set(status_definitions)
@@ -2913,11 +2955,19 @@ for doc_name in ("README.md", "CATALOG.md"):
     )
     record_links = visible_record_links(rendered)
     rendered_html_scan, _protected_html_code = protect_code_spans(rendered)
-    record_links.extend(visible_html_record_links(rendered_html_scan))
+    record_links.extend(
+        visible_html_record_links(
+            rendered_html_scan, markdown_contents=True
+        )
+    )
     raw_html_link_scan = strip_preformatted_html_scan_contents(
         "\n".join(raw_html_source)
     )
-    record_links.extend(visible_html_record_links(raw_html_link_scan))
+    record_links.extend(
+        visible_html_record_links(
+            raw_html_link_scan, markdown_contents=False
+        )
+    )
     for label, destination in record_links:
         rel, separator, fragment = destination.partition("#")
         if not rel.startswith("optimizations/") or not rel.endswith(".md"):
