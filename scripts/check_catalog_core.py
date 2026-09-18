@@ -79,7 +79,7 @@ LINK_RE = re.compile(
     r"\[([^\]]+)\]\((optimizations/[^)#]+\.md)(?:#[^)\s]*)?\)"
 )
 RECORD_LINK_CELL_RE = re.compile(
-    r"^\[(OPT-[A-Z]+-\d{3})\]\((optimizations/[^)#]+\.md)(?:#[^)\s]*)?\)$"
+    r"^\[(OPT-[A-Z]+-\d{3})\]\(\s*(optimizations/[^)#\s]+\.md)(?:#[^)\s]*)?\s*\)$"
 )
 ID_RE = re.compile(r"^# (OPT-[A-Z]+-\d{3}) — ")
 FILENAME_ID_RE = re.compile(r"^(OPT-[A-Z]+-\d{3})-")
@@ -290,6 +290,8 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                         paragraph_open = False
                         fence_char = run[0]
                         fence_len = len(run)
+                        if not visible or visible[-1] != "":
+                            visible.append("")
                         continue
 
                 html_start = raw_html_block_start(raw)
@@ -524,6 +526,85 @@ def find_inline_link_end(text: str, open_paren: int) -> int | None:
             return None
         i += 1
     return None
+
+
+def inline_link_destination(text: str, open_paren: int) -> str | None:
+    """Return a valid inline-link destination, honoring CommonMark whitespace."""
+    end = find_inline_link_end(text, open_paren)
+    if end is None:
+        return None
+
+    i = open_paren + 1
+    while i < len(text) and text[i] in " \t\n":
+        i += 1
+    if i >= len(text) or text[i] == ")":
+        return ""
+
+    if text[i] == "<":
+        start = i + 1
+        i = start
+        while i < len(text):
+            if text[i] == "\\" and i + 1 < len(text):
+                i += 2
+                continue
+            if text[i] == ">":
+                return text[start:i]
+            i += 1
+        return None
+
+    start = i
+    depth = 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\" and i + 1 < len(text):
+            i += 2
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                return text[start:i]
+            depth -= 1
+        elif char in " \t\n" and depth == 0:
+            return text[start:i]
+        i += 1
+    return None
+
+
+def visible_record_links(text: str) -> list[tuple[str, str]]:
+    """Return rendered OPT-labelled inline links with parsed destinations."""
+    links: list[tuple[str, str]] = []
+    i = 0
+    while i < len(text):
+        if text[i] != "[" or is_backslash_escaped(text, i):
+            i += 1
+            continue
+
+        label_close = find_label_close(text, i)
+        if (
+            label_close is None
+            or label_close + 1 >= len(text)
+            or text[label_close + 1] != "("
+        ):
+            i += 1
+            continue
+
+        raw_label = text[i + 1 : label_close]
+        rendered_label = unwrap_outer_formatting(raw_label, EMPHASIS_WRAPPERS)
+        if not re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label):
+            i = label_close + 1
+            continue
+
+        destination = inline_link_destination(text, label_close + 1)
+        if destination is None:
+            i += 1
+            continue
+
+        links.append((raw_label, re.sub(r"\\(.)", r"\1", destination)))
+        link_end = find_inline_link_end(text, label_close + 1)
+        i = link_end if link_end is not None else label_close + 1
+
+    return links
 
 
 def strip_inline_links(text: str) -> str:
@@ -885,7 +966,13 @@ record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in re
 for doc_name in ("README.md", "CATALOG.md"):
     text = (ROOT / doc_name).read_text(encoding="utf-8")
     rendered = visible_text(text)
-    for label, rel in LINK_RE.findall(rendered):
+    for label, destination in visible_record_links(rendered):
+        rel, _separator, _fragment = destination.partition("#")
+        if not rel.startswith("optimizations/") or not rel.endswith(".md"):
+            die(
+                f"visible record link in {doc_name} has invalid destination: "
+                f"{destination}"
+            )
         target = ROOT / rel
         if not target.is_file():
             die(f"broken visible record link in {doc_name}: {rel}")
