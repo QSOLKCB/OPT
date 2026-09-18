@@ -665,7 +665,13 @@ def parse_link_title_and_close(text: str, index: int) -> int | None:
             i += 1
             break
         if text[i] == "\n":
-            return None
+            probe = i + 1
+            while probe < len(text) and text[probe] in " \t":
+                probe += 1
+            if probe < len(text) and text[probe] == "\n":
+                return None
+            i += 1
+            continue
         i += 1
     else:
         return None
@@ -773,15 +779,68 @@ def inline_link_destination(text: str, open_paren: int) -> str | None:
     return None
 
 
+def inline_html_construct_end(text: str, index: int) -> int | None:
+    """Return end of one rendered-inline-HTML source construct."""
+    if index >= len(text) or text[index] != "<" or is_backslash_escaped(text, index):
+        return None
+    if text.startswith("<!--", index):
+        end = text.find("-->", index + 4)
+        return None if end < 0 else end + 3
+    if text.startswith("<?", index):
+        end = text.find("?>", index + 2)
+        return None if end < 0 else end + 2
+    if text.startswith("<![CDATA[", index):
+        end = text.find("]]>", index + 9)
+        return None if end < 0 else end + 3
+    if re.match(r"<![A-Z]", text[index:]):
+        end = text.find(">", index + 2)
+        return None if end < 0 else end + 1
+    match = INLINE_HTML_TAG_RE.match(text, index)
+    return match.end() if match is not None else None
+
+
+def strip_inline_html_constructs(text: str) -> str:
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        end = inline_html_construct_end(text, index)
+        if end is not None:
+            index = end
+            continue
+        out.append(text[index])
+        index += 1
+    return "".join(out)
+
+
+def rendered_record_label(value: str) -> str:
+    """Render the narrow inline subset allowed for record IDs."""
+    stripped = value.strip()
+    protected_text, protected = protect_code_spans(stripped)
+    if len(protected_text) == 1 and protected_text in protected:
+        code_text = protected[protected_text].replace("\n", " ")
+        if (
+            len(code_text) >= 2
+            and code_text.startswith(" ")
+            and code_text.endswith(" ")
+            and code_text.strip()
+        ):
+            code_text = code_text[1:-1]
+        return html.unescape(code_text)
+
+    result = unwrap_outer_formatting(stripped, EMPHASIS_WRAPPERS)
+    result = commonmark_unescape(result)
+    return html.unescape(result).strip()
+
+
 def visible_record_links(text: str) -> list[tuple[str, str]]:
     """Return rendered OPT-labelled inline links with parsed destinations."""
     links: list[tuple[str, str]] = []
     i = 0
     while i < len(text):
         if text[i] == "<":
-            html_match = INLINE_HTML_TAG_RE.match(text, i)
-            if html_match is not None:
-                i = html_match.end()
+            html_end = inline_html_construct_end(text, i)
+            if html_end is not None:
+                i = html_end
                 continue
         if text[i] != "[" or is_backslash_escaped(text, i):
             i += 1
@@ -804,7 +863,7 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
             continue
 
         raw_label = text[i + 1 : label_close]
-        rendered_label = rendered_inline_text(raw_label)
+        rendered_label = rendered_record_label(raw_label)
         if not re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label):
             i = label_close + 1
             continue
@@ -984,7 +1043,7 @@ def parse_record_link_cell(cell: str, context: str) -> tuple[str, str]:
     if link_end is None or link_end != len(value):
         die(f"{context} has invalid record-link cell: {cell}")
 
-    rendered_label = rendered_inline_text(value[1:label_close])
+    rendered_label = rendered_record_label(value[1:label_close])
     if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is None:
         die(f"{context} has invalid record-link label: {cell}")
 
@@ -1018,17 +1077,44 @@ def has_substantive_rendered_text(value: str) -> bool:
 
 
 def reference_definition_hidden_indexes(lines: list[str]) -> set[int]:
-    """Return lines consumed by non-rendering reference definitions/titles."""
+    """Return source indexes consumed by non-rendering reference definitions."""
     hidden: set[int] = set()
-    for i, raw in enumerate(lines):
-        if not LINK_REFERENCE_DEFINITION_RE.fullmatch(raw.strip()):
+    prefix_re = re.compile(
+        r"^ {0,3}\[(?P<label>(?:\\.|[^\[\]\\])+)\]:[ \t]*(?P<rest>.*)$"
+    )
+    index = 0
+    while index < len(lines):
+        match = prefix_re.fullmatch(lines[index])
+        if match is None or len(match.group("label")) > 999:
+            index += 1
             continue
-        hidden.add(i)
+
+        rest = match.group("rest")
+        hidden.add(index)
+        consumed = 1
+
+        if not rest:
+            if (
+                index + 1 < len(lines)
+                and re.match(r"^ {1,3}\S", lines[index + 1])
+            ):
+                hidden.add(index + 1)
+                consumed += 1
+            else:
+                hidden.discard(index)
+                index += 1
+                continue
+
         if (
-            i + 1 < len(lines)
-            and LINK_REFERENCE_TITLE_CONTINUATION_RE.fullmatch(lines[i + 1])
+            index + consumed < len(lines)
+            and LINK_REFERENCE_TITLE_CONTINUATION_RE.fullmatch(
+                lines[index + consumed]
+            )
         ):
-            hidden.add(i + 1)
+            hidden.add(index + consumed)
+            consumed += 1
+
+        index += consumed
     return hidden
 
 
@@ -1064,7 +1150,7 @@ def source_section_has_identity(lines: list[str]) -> bool:
     """Require at least one concrete, non-placeholder provenance identity."""
     sources_root = (ROOT / "sources").resolve()
     for raw in visible_nonfenced_lines(lines):
-        line = raw.strip()
+        line = strip_inline_html_constructs(raw.strip())
         if not line or SOURCE_PLACEHOLDER_RE.fullmatch(line):
             continue
         if SOURCE_URL_RE.search(line) or SOURCE_DOI_RE.search(line) or SOURCE_COMMIT_RE.search(line):
@@ -1273,7 +1359,7 @@ for doc_name in ("README.md", "CATALOG.md"):
             )
 
 catalog = (ROOT / "CATALOG.md").read_text(encoding="utf-8")
-visible_catalog = visible_text(catalog)
+visible_catalog = strip_inline_html_constructs(visible_text(catalog))
 catalog_ids = set(OPT_TOKEN_RE.findall(visible_catalog))
 unknown_catalog_ids = sorted(catalog_ids - records.keys())
 if unknown_catalog_ids:
