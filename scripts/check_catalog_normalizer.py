@@ -63,9 +63,9 @@ INLINE_HTML_TAG_RE = re.compile(
     r"[ \t]*/?>"
 )
 HTML_HIDDEN_ATTR_RE = re.compile(
-    r"(?:^|[ \\t\\r\\n])hidden"
-    r"(?:[ \\t\\r\\n]*=[ \\t\\r\\n]*(?:\\\"[^\\\"]*\\\"|\'[^\']*\'|[^ \\t\\r\\n\\\"\'=<>`]+))?"
-    r"(?=[ \\t\\r\\n/>]|$)",
+    r"(?:^|[ \t\r\n])hidden"
+    r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\\\"[^\\\"]*\\\"|\'[^\']*\'|[^ \t\r\n\\\"\'=<>`]+))?"
+    r"(?=[ \t\r\n/>]|$)",
     re.IGNORECASE,
 )
 NONRENDERING_INLINE_HTML_TAGS = {"script", "style", "template", "head", "title"}
@@ -1088,7 +1088,7 @@ def _strip_nonrendering_inline_html_regions(text: str) -> str:
 
             source = tag.group(0)
             if re.fullmatch(
-                rf"</{re.escape(hidden_tag)}[ \\t\\r\\n]*>",
+                rf"</{re.escape(hidden_tag)}[ \t\r\n]*>",
                 source,
                 re.IGNORECASE,
             ):
@@ -1098,7 +1098,7 @@ def _strip_nonrendering_inline_html_regions(text: str) -> str:
                 continue
 
             if re.match(
-                rf"<{re.escape(hidden_tag)}(?:[ \\t\\r\\n/>]|$)",
+                rf"<{re.escape(hidden_tag)}(?:[ \t\r\n/>]|$)",
                 source,
                 re.IGNORECASE,
             ):
