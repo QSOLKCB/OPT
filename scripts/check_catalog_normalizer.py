@@ -109,7 +109,6 @@ EXPLICIT_COMMIT_CONTEXT_RE = re.compile(
     r"(?:"
     r"\b(?:commit(?:[ \t]+sha)?|sha|revision|rev)\b[^0-9A-Za-z]{0,12}"
     r"|\b(?:pinned|inspected)[ \t]+at\b[^0-9A-Za-z]{0,12}"
-    r"|@"
     r")$",
     re.IGNORECASE,
 )
@@ -891,6 +890,56 @@ def canonicalize_multiline_inline_comment_context(text: str) -> str:
     return "".join(out)
 
 
+def _valid_inline_comment_end(text: str, index: int) -> int | None:
+    if not text.startswith("<!--", index):
+        return None
+    end = text.find("-->", index + 4)
+    if end < 0:
+        return None
+    body = text[index + 4 : end]
+    if body.startswith(">") or body.startswith("->") or "--" in body or body.endswith("-"):
+        return None
+    return end + 3
+
+
+def _strip_valid_inline_comments(text: str) -> str:
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        start = text.find("<!--", index)
+        if start < 0:
+            out.append(text[index:])
+            break
+        end = _valid_inline_comment_end(text, start)
+        if end is None:
+            out.append(text[index : start + 1])
+            index = start + 1
+            continue
+        out.append(text[index:start])
+        index = end
+    return "".join(out)
+
+
+def _render_placeholder_with_following_lines(
+    lines: list[str], index: int, value: str
+) -> str:
+    """Render a field value together with a valid multiline inline comment."""
+    source = value
+    comment_start = source.find("<!--")
+    if comment_start >= 0 and _valid_inline_comment_end(source, comment_start) is None:
+        cursor = index + 1
+        while cursor < len(lines):
+            continuation = lines[cursor].rstrip("\r\n")
+            if not continuation.strip():
+                break
+            source += "\n" + continuation
+            if _valid_inline_comment_end(source, comment_start) is not None:
+                break
+            cursor += 1
+    source = _strip_valid_inline_comments(source)
+    return _render_placeholder_candidate(source)
+
+
 def _render_placeholder_candidate(value: str) -> str:
     """Render the subset of inline Markdown relevant to template placeholders."""
     result = html.unescape(value.strip())
@@ -928,8 +977,9 @@ def _render_placeholder_candidate(value: str) -> str:
 
 def canonicalize_classification_placeholders(text: str) -> str:
     """Normalize rendered-but-unselected template values back to canonical source."""
+    lines = text.splitlines(keepends=True)
     out: list[str] = []
-    for raw in text.splitlines(keepends=True):
+    for index, raw in enumerate(lines):
         content = raw.rstrip("\r\n")
         ending = raw[len(content) :]
         match = CLASSIFICATION_FIELD_RE.fullmatch(content)
@@ -939,7 +989,8 @@ def canonicalize_classification_placeholders(text: str) -> str:
 
         field = match.group("field")
         value = match.group("value")
-        if _render_placeholder_candidate(value) == CLASSIFICATION_TEMPLATE_VALUES[field]:
+        rendered = _render_placeholder_with_following_lines(lines, index, value)
+        if rendered == CLASSIFICATION_TEMPLATE_VALUES[field]:
             out.append(match.group("prefix") + CLASSIFICATION_TEMPLATE_VALUES[field] + ending)
         else:
             out.append(raw)
@@ -948,15 +999,18 @@ def canonicalize_classification_placeholders(text: str) -> str:
 
 def canonicalize_generic_required_placeholders(text: str) -> str:
     """Turn rendered generic placeholders into empty values so the strict core rejects them."""
+    lines = text.splitlines(keepends=True)
     out: list[str] = []
-    for raw in text.splitlines(keepends=True):
+    for index, raw in enumerate(lines):
         content = raw.rstrip("\r\n")
         ending = raw[len(content) :]
         match = REQUIRED_FIELD_RE.fullmatch(content)
         if match is None:
             out.append(raw)
             continue
-        rendered = _render_placeholder_candidate(match.group("value"))
+        rendered = _render_placeholder_with_following_lines(
+            lines, index, match.group("value")
+        )
         if GENERIC_PLACEHOLDER_RE.fullmatch(rendered):
             out.append(match.group("prefix") + ending)
         else:
