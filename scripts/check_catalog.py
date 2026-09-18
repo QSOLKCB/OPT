@@ -20,10 +20,10 @@ FULL_REFERENCE_LINK_RE = re.compile(
     r"^\[(?P<label>[^\]]*)\]\[(?P<reference>[^\]]*)\]$"
 )
 REFERENCE_RECORD_LINK_RE = re.compile(
-    r"(?<!!)\[(?P<label>OPT-[A-Z]+-\d{3})\]\[(?P<reference>[^\]]*)\]"
+    r"\[(?P<label>OPT-[A-Z]+-\d{3})\]\[(?P<reference>[^\]]*)\]"
 )
 SHORT_REFERENCE_RECORD_LINK_RE = re.compile(
-    r"(?<!!)\[(?P<label>OPT-[A-Z]+-\d{3})\](?![\[(])"
+    r"\[(?P<label>OPT-[A-Z]+-\d{3})\](?![\[(])"
 )
 ATX_LEVEL_1_OR_2_RE = re.compile(r"^#{1,2}(?:[ \t]|$)")
 GENERIC_SECTION_PLACEHOLDER_RE = re.compile(
@@ -59,23 +59,77 @@ INVALID_REFERENCE_DESTINATION = "optimizations/__invalid_reference_destination__
 STATUS_WRAPPERS = ("**", "__", "~~", "*", "_", "`")
 
 
-def _normalized_reference_label(label: str) -> str:
-    """Apply CommonMark label normalization without over-unescaping backslashes."""
+def _commonmark_unescape(value: str) -> str:
+    """Unescape only backslash-escapable ASCII punctuation."""
     out: list[str] = []
     index = 0
-    while index < len(label):
-        char = label[index]
+    while index < len(value):
+        char = value[index]
         if (
             char == "\\"
-            and index + 1 < len(label)
-            and label[index + 1] in string.punctuation
+            and index + 1 < len(value)
+            and value[index + 1] in string.punctuation
         ):
-            out.append(label[index + 1])
+            out.append(value[index + 1])
             index += 2
             continue
         out.append(char)
         index += 1
-    return " ".join("".join(out).split()).casefold()
+    return "".join(out)
+
+
+def _normalized_reference_label(label: str) -> str:
+    """Apply CommonMark reference-label normalization."""
+    return " ".join(_commonmark_unescape(label).split()).casefold()
+
+
+def _is_backslash_escaped(text: str, index: int) -> bool:
+    count = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        count += 1
+        cursor -= 1
+    return count % 2 == 1
+
+
+def _reference_match_is_image(match: re.Match[str]) -> bool:
+    start = match.start()
+    return (
+        start > 0
+        and match.string[start - 1] == "!"
+        and not _is_backslash_escaped(match.string, start - 1)
+    )
+
+
+def _is_indented_code_source(raw: str) -> bool:
+    columns = 0
+    for char in raw:
+        if char == " ":
+            columns += 1
+        elif char == "\t":
+            columns += 4 - (columns % 4)
+        else:
+            break
+        if columns >= 4:
+            return True
+    return False
+
+
+def _reference_line_interrupts_paragraph(raw: str, paragraph_open: bool) -> bool:
+    if _is_indented_code_source(raw):
+        return True
+    if re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", raw):
+        return True
+    if normalizer.THEMATIC_BREAK_RE.fullmatch(raw):
+        return True
+    if normalizer.BLOCKQUOTE_PREFIX_RE.match(raw):
+        return True
+    if re.match(r"^ {0,3}[-+*][ \t]+", raw):
+        return True
+    ordered = re.match(r"^ {0,3}(?P<number>\d+)[.)][ \t]+", raw)
+    if ordered is not None:
+        return not paragraph_open or ordered.group("number") == "1"
+    return False
 
 
 def _reference_definition_source_lines(text: str) -> list[str]:
@@ -106,10 +160,16 @@ def _reference_definition_source_lines(text: str) -> list[str]:
             return "token", "]]>"
         if re.match(r"^ {0,3}<![A-Z]", raw, re.IGNORECASE):
             return "token", ">"
-        if normalizer.STANDALONE_HTML_TAG_RE.fullmatch(raw):
+        block_tag = re.match(
+            r"^ {0,3}</?(?P<tag>[A-Za-z][A-Za-z0-9-]*)(?:[ \t\n/>]|$)",
+            raw,
+        )
+        if (
+            block_tag is not None
+            and block_tag.group("tag").lower() in normalizer.HTML_BLOCK_TAGS
+        ):
             return "blank", None
-        tag = normalizer._standalone_html_tag_name(raw)
-        if tag in normalizer.HTML_BLOCK_TAGS:
+        if normalizer.STANDALONE_HTML_TAG_RE.fullmatch(raw):
             return "blank", None
         return None
 
@@ -261,12 +321,9 @@ def _reference_entries(text: str) -> list[tuple[str, str]]:
 
         match = prefix_re.fullmatch(raw)
         if match is None or paragraph_open:
-            if (
-                re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", raw)
-                or normalizer.THEMATIC_BREAK_RE.fullmatch(raw)
-                or normalizer.LIST_BLOCK_RE.match(raw)
-                or normalizer.BLOCKQUOTE_PREFIX_RE.match(raw)
-            ):
+            if _is_indented_code_source(raw):
+                paragraph_open = False
+            elif _reference_line_interrupts_paragraph(raw, paragraph_open):
                 paragraph_open = False
             else:
                 paragraph_open = True
@@ -306,7 +363,7 @@ def _reference_entries(text: str) -> list[tuple[str, str]]:
             ):
                 consumed += 1
 
-        entries.append((label, re.sub(r"\\(.)", r"\1", destination)))
+        entries.append((label, _commonmark_unescape(destination)))
         paragraph_open = False
         index += consumed
 
@@ -449,6 +506,7 @@ def canonicalize_uncontextualized_repository_tokens(text: str) -> str:
     out: list[str] = []
     in_source_evidence = False
     repository_continuation_indent: int | None = None
+    repository_blank_count = 0
 
     for raw in text.splitlines(keepends=True):
         content = raw.rstrip("\r\n")
@@ -457,11 +515,13 @@ def canonicalize_uncontextualized_repository_tokens(text: str) -> str:
         if content == "## Source evidence":
             in_source_evidence = True
             repository_continuation_indent = None
+            repository_blank_count = 0
             out.append(raw)
             continue
         if ATX_LEVEL_1_OR_2_RE.match(content):
             in_source_evidence = False
             repository_continuation_indent = None
+            repository_blank_count = 0
             out.append(raw)
             continue
 
@@ -470,9 +530,13 @@ def canonicalize_uncontextualized_repository_tokens(text: str) -> str:
             continue
 
         if not content.strip():
+            repository_blank_count += 1
+            if repository_blank_count >= 2:
+                repository_continuation_indent = None
             out.append(raw)
             continue
 
+        repository_blank_count = 0
         leading = len(content) - len(content.lstrip(" "))
         has_repository_context = REPOSITORY_CONTEXT_RE.search(content) is not None
         continuation_has_context = (
@@ -543,6 +607,8 @@ def canonicalize_reference_record_links(text: str) -> str:
         return destinations.get(_normalized_reference_label(reference_label))
 
     def replace_full(match: re.Match[str]) -> str:
+        if _reference_match_is_image(match):
+            return match.group(0)
         label = match.group("label")
         destination = destination_for(label, match.group("reference"))
         if destination is None:
@@ -554,6 +620,8 @@ def canonicalize_reference_record_links(text: str) -> str:
     text = REFERENCE_RECORD_LINK_RE.sub(replace_full, text)
 
     def replace_short(match: re.Match[str]) -> str:
+        if _reference_match_is_image(match):
+            return match.group(0)
         label = match.group("label")
         destination = destinations.get(_normalized_reference_label(label))
         if destination is None:
