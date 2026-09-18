@@ -486,11 +486,31 @@ def find_label_close(text: str, open_index: int) -> int | None:
     return None
 
 
+def skip_inline_link_whitespace(text: str, index: int) -> int | None:
+    """Skip spaces/tabs and at most one line ending; reject blank lines."""
+    i = index
+    saw_newline = False
+    while i < len(text):
+        if text[i] in " \t":
+            i += 1
+            continue
+        if text[i] == "\n":
+            if saw_newline:
+                return None
+            saw_newline = True
+            i += 1
+            continue
+        break
+    return i
+
+
 def parse_link_title_and_close(text: str, index: int) -> int | None:
     """Parse whitespace plus an optional CommonMark-style title and outer close."""
-    i = index
-    while i < len(text) and text[i] in " \t\n":
-        i += 1
+    skipped = skip_inline_link_whitespace(text, index)
+    if skipped is None:
+        return None
+    i = skipped
+
     if i < len(text) and text[i] == ")":
         return i + 1
     if i >= len(text):
@@ -514,8 +534,10 @@ def parse_link_title_and_close(text: str, index: int) -> int | None:
     else:
         return None
 
-    while i < len(text) and text[i] in " \t\n":
-        i += 1
+    skipped = skip_inline_link_whitespace(text, i)
+    if skipped is None:
+        return None
+    i = skipped
     if i < len(text) and text[i] == ")":
         return i + 1
     return None
@@ -523,9 +545,11 @@ def parse_link_title_and_close(text: str, index: int) -> int | None:
 
 def find_inline_link_end(text: str, open_paren: int) -> int | None:
     """Return the end of a valid inline-link destination/title, or None."""
-    i = open_paren + 1
-    while i < len(text) and text[i] in " \t\n":
-        i += 1
+    skipped = skip_inline_link_whitespace(text, open_paren + 1)
+    if skipped is None:
+        return None
+    i = skipped
+
     if i >= len(text):
         return None
     if text[i] == ")":
@@ -574,9 +598,11 @@ def inline_link_destination(text: str, open_paren: int) -> str | None:
     if end is None:
         return None
 
-    i = open_paren + 1
-    while i < len(text) and text[i] in " \t\n":
-        i += 1
+    skipped = skip_inline_link_whitespace(text, open_paren + 1)
+    if skipped is None:
+        return None
+    i = skipped
+
     if i >= len(text) or text[i] == ")":
         return ""
 
@@ -619,6 +645,13 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
         if text[i] != "[" or is_backslash_escaped(text, i):
             i += 1
             continue
+        if (
+            i > 0
+            and text[i - 1] == "!"
+            and not is_backslash_escaped(text, i - 1)
+        ):
+            i += 1
+            continue
 
         label_close = find_label_close(text, i)
         if (
@@ -630,7 +663,7 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
             continue
 
         raw_label = text[i + 1 : label_close]
-        rendered_label = unwrap_outer_formatting(raw_label, EMPHASIS_WRAPPERS)
+        rendered_label = rendered_inline_text(raw_label)
         if not re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label):
             i = label_close + 1
             continue
@@ -640,7 +673,7 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
             i += 1
             continue
 
-        links.append((raw_label, re.sub(r"\\(.)", r"\1", destination)))
+        links.append((rendered_label, re.sub(r"\\(.)", r"\1", destination)))
         link_end = find_inline_link_end(text, label_close + 1)
         i = link_end if link_end is not None else label_close + 1
 
