@@ -96,6 +96,14 @@ LINK_REFERENCE_TITLE_CONTINUATION_RE = re.compile(
 SOURCE_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 SOURCE_DOI_RE = re.compile(r"\b(?:doi:\s*)?10\.\d{4,9}/\S+", re.IGNORECASE)
 SOURCE_COMMIT_RE = re.compile(r"\b[0-9a-f]{7,40}\b", re.IGNORECASE)
+SOURCE_COMMIT_CONTEXT_RE = re.compile(
+    r"(?:"
+    r"\b(?:commit(?:[ \t]+sha)?|sha|revision|rev)\b[^0-9A-Za-z]{0,12}"
+    r"|\b(?:pinned|inspected)[ \t]+at\b[^0-9A-Za-z]{0,12}"
+    r"|@"
+    r")$",
+    re.IGNORECASE,
+)
 SOURCE_LOCAL_NOTE_RE = re.compile(r"`?(sources/[A-Za-z0-9._/-]+\.md)`?")
 SOURCE_REPOSITORY_RE = re.compile(r"`[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+`")
 SOURCE_PLACEHOLDER_RE = re.compile(
@@ -857,8 +865,8 @@ def rendered_record_label(value: str) -> str:
         return code_text
 
     result = unwrap_outer_formatting(stripped, EMPHASIS_WRAPPERS)
-    result = commonmark_unescape(result)
-    return html.unescape(result).strip()
+    result = strip_inline_html_constructs(result)
+    return commonmark_unescape(result).strip()
 
 
 def visible_record_links(text: str) -> list[tuple[str, str]]:
@@ -1283,6 +1291,12 @@ def section_has_content(lines: list[str]) -> bool:
     return False
 
 
+def source_commit_has_context(line: str, match: re.Match[str]) -> bool:
+    prefix = line[max(0, match.start() - 80) : match.start()]
+    cleaned = prefix.rstrip(" \t`*_~([{<")
+    return SOURCE_COMMIT_CONTEXT_RE.search(cleaned) is not None
+
+
 def source_section_has_identity(lines: list[str]) -> bool:
     """Require at least one concrete, rendered provenance identity."""
     sources_root = (ROOT / "sources").resolve()
@@ -1294,7 +1308,12 @@ def source_section_has_identity(lines: list[str]) -> bool:
         line = strip_inline_html_constructs(raw.strip())
         if not line or SOURCE_PLACEHOLDER_RE.fullmatch(line):
             continue
-        if SOURCE_URL_RE.search(line) or SOURCE_DOI_RE.search(line) or SOURCE_COMMIT_RE.search(line):
+        if SOURCE_URL_RE.search(line) or SOURCE_DOI_RE.search(line):
+            return True
+        if any(
+            source_commit_has_context(line, match)
+            for match in SOURCE_COMMIT_RE.finditer(line)
+        ):
             return True
         for match in SOURCE_LOCAL_NOTE_RE.finditer(line):
             candidate = (ROOT / match.group(1)).resolve()
