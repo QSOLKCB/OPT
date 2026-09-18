@@ -2033,8 +2033,12 @@ if missing_frozen:
 record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in records.items()}
 
 
-HTML_ANCHOR_ID_RE = re.compile(
-    r"""(?:^|[ \t\r\n])(?:id|name)[ \t\r\n]*=[ \t\r\n]*(?:"([^"]+)"|'([^']+)'|([^ \t\r\n"'=<>\x60]+))""",
+HTML_ID_ATTR_RE = re.compile(
+    r"""(?:^|[ \t\r\n])id[ \t\r\n]*=[ \t\r\n]*(?:"([^"]+)"|'([^']+)'|([^ \t\r\n"'=<>\x60]+))""",
+    re.IGNORECASE,
+)
+HTML_NAME_ATTR_RE = re.compile(
+    r"""(?:^|[ \t\r\n])name[ \t\r\n]*=[ \t\r\n]*(?:"([^"]+)"|'([^']+)'|([^ \t\r\n"'=<>\x60]+))""",
     re.IGNORECASE,
 )
 
@@ -2098,9 +2102,17 @@ def record_fragment_ids(path: Path) -> set[str]:
 
     for tag in INLINE_HTML_TAG_RE.finditer(visible_html_source):
         source = tag.group(0)
-        for match in HTML_ANCHOR_ID_RE.finditer(source):
+        if source.startswith("</"):
+            continue
+
+        for match in HTML_ID_ATTR_RE.finditer(source):
             anchor = next(value for value in match.groups() if value is not None)
             anchors.add(html.unescape(anchor))
+
+        if re.match(r"<a(?:[ \t\r\n]|>)", source, re.IGNORECASE):
+            for match in HTML_NAME_ATTR_RE.finditer(source):
+                anchor = next(value for value in match.groups() if value is not None)
+                anchors.add(html.unescape(anchor))
 
     return anchors
 
