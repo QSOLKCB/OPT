@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import string
 
 import check_catalog_normalizer as normalizer
 
@@ -59,16 +60,58 @@ STATUS_WRAPPERS = ("**", "__", "~~", "*", "_", "`")
 
 
 def _normalized_reference_label(label: str) -> str:
-    """Approximate CommonMark reference-label normalization for integrity checks."""
-    unescaped = re.sub(r"\\(.)", r"\1", label)
-    return " ".join(unescaped.split()).casefold()
+    """Apply CommonMark label normalization without over-unescaping backslashes."""
+    out: list[str] = []
+    index = 0
+    while index < len(label):
+        char = label[index]
+        if (
+            char == "\\"
+            and index + 1 < len(label)
+            and label[index + 1] in string.punctuation
+        ):
+            out.append(label[index + 1])
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return " ".join("".join(out).split()).casefold()
 
 
 def _reference_definition_source_lines(text: str) -> list[str]:
-    """Return source lines outside fenced code while retaining continuations."""
+    """Return definition-relevant source with removed blocks preserved as boundaries."""
     lines: list[str] = []
     fence_char: str | None = None
     fence_len = 0
+    html_mode: str | None = None
+    html_end: str | None = None
+
+    def boundary() -> None:
+        if not lines or lines[-1] != "":
+            lines.append("")
+
+    def html_start(raw: str) -> tuple[str, str | None] | None:
+        if re.match(r"^ {0,3}<!--", raw):
+            return "token", "-->"
+        type1 = re.match(
+            r"^ {0,3}<(?P<tag>script|pre|style|textarea)(?:[ \t]|>|$)",
+            raw,
+            re.IGNORECASE,
+        )
+        if type1 is not None:
+            return "tag", type1.group("tag").lower()
+        if re.match(r"^ {0,3}<\?", raw):
+            return "token", "?>"
+        if re.match(r"^ {0,3}<!\[CDATA\[", raw, re.IGNORECASE):
+            return "token", "]]>"
+        if re.match(r"^ {0,3}<![A-Z]", raw, re.IGNORECASE):
+            return "token", ">"
+        if normalizer.STANDALONE_HTML_TAG_RE.fullmatch(raw):
+            return "blank", None
+        tag = normalizer._standalone_html_tag_name(raw)
+        if tag in normalizer.HTML_BLOCK_TAGS:
+            return "blank", None
+        return None
 
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     for raw in normalized.split("\n"):
@@ -81,15 +124,50 @@ def _reference_definition_source_lines(text: str) -> list[str]:
                 fence_len = 0
             continue
 
+        if html_mode is not None:
+            if html_mode == "tag":
+                if html_end is not None and re.search(
+                    rf"</{re.escape(html_end)}>", raw, re.IGNORECASE
+                ):
+                    html_mode = None
+                    html_end = None
+                continue
+            if html_mode == "token":
+                if html_end is not None and html_end in raw:
+                    html_mode = None
+                    html_end = None
+                continue
+            if html_mode == "blank":
+                if not raw.strip():
+                    html_mode = None
+                    html_end = None
+                    boundary()
+                continue
+
         if not (raw.startswith("\t") or raw.startswith("    ")):
             opener = REFERENCE_FENCE_OPEN_RE.match(raw)
             if opener is not None:
                 run = opener.group(1)
                 info = opener.group(2)
                 if run[0] != chr(96) or chr(96) not in info:
+                    boundary()
                     fence_char = run[0]
                     fence_len = len(run)
                     continue
+
+            started = html_start(raw)
+            if started is not None:
+                boundary()
+                html_mode, html_end = started
+                if html_mode == "tag" and html_end is not None and re.search(
+                    rf"</{re.escape(html_end)}>", raw, re.IGNORECASE
+                ):
+                    html_mode = None
+                    html_end = None
+                elif html_mode == "token" and html_end is not None and html_end in raw:
+                    html_mode = None
+                    html_end = None
+                continue
 
         lines.append(raw)
 
@@ -172,10 +250,26 @@ def _reference_entries(text: str) -> list[tuple[str, str]]:
         r"^ {0,3}\[(?P<label>(?:\\.|[^\[\]\\])+)\]:[ \t]*(?P<rest>.*)$"
     )
     index = 0
+    paragraph_open = False
 
     while index < len(lines):
-        match = prefix_re.fullmatch(lines[index])
-        if match is None:
+        raw = lines[index]
+        if not raw.strip():
+            paragraph_open = False
+            index += 1
+            continue
+
+        match = prefix_re.fullmatch(raw)
+        if match is None or paragraph_open:
+            if (
+                re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", raw)
+                or normalizer.THEMATIC_BREAK_RE.fullmatch(raw)
+                or normalizer.LIST_BLOCK_RE.match(raw)
+                or normalizer.BLOCKQUOTE_PREFIX_RE.match(raw)
+            ):
+                paragraph_open = False
+            else:
+                paragraph_open = True
             index += 1
             continue
 
@@ -213,6 +307,7 @@ def _reference_entries(text: str) -> list[tuple[str, str]]:
                 consumed += 1
 
         entries.append((label, re.sub(r"\\(.)", r"\1", destination)))
+        paragraph_open = False
         index += consumed
 
     return entries
@@ -375,7 +470,6 @@ def canonicalize_uncontextualized_repository_tokens(text: str) -> str:
             continue
 
         if not content.strip():
-            repository_continuation_indent = None
             out.append(raw)
             continue
 
