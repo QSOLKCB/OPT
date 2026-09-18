@@ -1173,6 +1173,19 @@ def _render_placeholder_candidate(value: str) -> str:
             changed = True
             continue
 
+        if result.startswith("!["):
+            label_close = _find_label_close(result, 1)
+            if (
+                label_close is not None
+                and label_close + 1 < len(result)
+                and result[label_close + 1] == "("
+            ):
+                image_end = _find_inline_link_end(result, label_close + 1)
+                if image_end == len(result):
+                    result = result[2:label_close].strip()
+                    changed = True
+                    continue
+
         if result.startswith("["):
             label_close = _find_label_close(result, 0)
             if (
