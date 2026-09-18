@@ -114,7 +114,7 @@ REFERENCE_LINK_RE = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
 INLINE_HTML_TAG_RE = re.compile(
     r"</?[A-Za-z][A-Za-z0-9-]*"
     r"(?:[ \t\r\n]+[A-Za-z_:][A-Za-z0-9_.:-]*"
-    r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\"[^\"]*\"|'[^']*'|[^ \t\r\n\"'=<>\\x60]+))?)*"
+    r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\"[^\"]*\"|'[^']*'|[^ \t\r\n\"'=<>\x60]+))?)*"
     r"[ \t\r\n]*/?>"
 )
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
@@ -370,8 +370,15 @@ def _line_keeps_paragraph_open(raw: str, was_open: bool = False) -> bool:
     return True
 
 
-def visible_nonfenced_lines(lines: list[str]) -> list[str]:
-    """Return Markdown-visible lines used by schema validation."""
+def visible_nonfenced_lines(
+    lines: list[str], raw_html_text: list[str] | None = None
+) -> list[str]:
+    """Return Markdown-visible lines used by schema validation.
+
+    When raw_html_text is supplied, visible text nodes from raw HTML blocks are
+    collected separately so callers can inspect rendered HTML text without
+    treating it as Markdown structure.
+    """
     visible: list[str] = []
     fence_char: str | None = None
     fence_len = 0
@@ -443,6 +450,15 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     if html_list_indent > 0
                     else block_raw
                 )
+                if (
+                    raw_html_text is not None
+                    and html_mode == "tag"
+                    and html_end in {"pre", "textarea"}
+                ):
+                    rendered_html = strip_inline_html_constructs(html_view)
+                    if rendered_html.strip():
+                        raw_html_text.append(rendered_html)
+
                 if html_mode == "tag":
                     if html_end is not None and raw_html_tag_closes(html_view, html_end):
                         html_mode = None
@@ -458,6 +474,10 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                         html_list_indent = 0
                     continue
                 if html_mode == "blank":
+                    if raw_html_text is not None:
+                        rendered_html = strip_inline_html_constructs(html_view)
+                        if rendered_html.strip():
+                            raw_html_text.append(rendered_html)
                     if html_view.strip() == "":
                         html_mode = None
                         html_end = None
@@ -515,6 +535,13 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     html_mode, html_end = html_start
                     html_quote_depth = quote_depth
                     html_list_indent = current_list_indent or 0
+                    if raw_html_text is not None and (
+                        html_mode == "blank"
+                        or (html_mode == "tag" and html_end in {"pre", "textarea"})
+                    ):
+                        rendered_html = strip_inline_html_constructs(block_view)
+                        if rendered_html.strip():
+                            raw_html_text.append(rendered_html)
                     if (
                         html_mode == "tag"
                         and html_end is not None
@@ -971,7 +998,7 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
         raw_label = text[i + 1 : label_close]
         rendered_label = rendered_record_label(raw_label)
         if not re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label):
-            i = label_close + 1
+            i += 1
             continue
 
         destination = inline_link_destination(text, label_close + 1)
@@ -1018,7 +1045,7 @@ def strip_inline_links(text: str) -> str:
 
 
 def markdown_table_cells(line: str) -> list[str] | None:
-    """Split a pipe table on unescaped delimiters outside backtick code spans."""
+    """Split a GFM pipe table on every unescaped pipe delimiter."""
     if is_indented_code_line(line):
         return None
     stripped = line.strip()
@@ -1042,7 +1069,7 @@ def markdown_table_cells(line: str) -> list[str] | None:
             i += run_len
             continue
 
-        if char == "|" and code_run_len is None:
+        if char == "|":
             if is_backslash_escaped(stripped, i):
                 if current and current[-1] == "\\":
                     current.pop()
@@ -1164,6 +1191,23 @@ def parse_record_link_cell(cell: str, context: str) -> tuple[str, str]:
     return rendered_label, rel
 
 
+def strip_paired_inline_formatting(text: str) -> str:
+    """Remove paired inline formatting delimiters while preserving unmatched ones."""
+    patterns = (
+        re.compile(r"\*\*(?=\S)(.+?\S)\*\*"),
+        re.compile(r"__(?=\S)(.+?\S)__"),
+        re.compile(r"~~(?=\S)(.+?\S)~~"),
+        re.compile(r"\*(?=\S)(.+?\S)\*"),
+        re.compile(r"_(?=\S)(.+?\S)_"),
+    )
+    previous = None
+    while text != previous:
+        previous = text
+        for pattern in patterns:
+            text = pattern.sub(lambda match: match.group(1), text)
+    return text
+
+
 def rendered_inline_text(value: str) -> str:
     """Approximate rendered inline text for required field-value validation."""
     text, protected_code = protect_code_spans(value)
@@ -1171,7 +1215,7 @@ def rendered_inline_text(value: str) -> str:
     text = REFERENCE_IMAGE_RE.sub(lambda m: m.group(1), text)
     text = REFERENCE_LINK_RE.sub(lambda m: m.group(1), text)
     text = strip_inline_html_constructs(text)
-    text = re.sub(r"[`*_~]", "", text)
+    text = strip_paired_inline_formatting(text)
     text = commonmark_unescape(text)
     for token, code_text in protected_code.items():
         text = text.replace(token, code_text)
@@ -1442,6 +1486,46 @@ def source_commit_has_context(line: str, match: re.Match[str]) -> bool:
     return SOURCE_COMMIT_CONTEXT_RE.search(cleaned) is not None
 
 
+def inline_link_destinations(text: str) -> list[str]:
+    """Return destinations of valid inline links, excluding images and titles."""
+    destinations: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "<":
+            html_end = inline_html_construct_end(text, i)
+            if html_end is not None:
+                i = html_end
+                continue
+        if text[i] != "[" or is_backslash_escaped(text, i):
+            i += 1
+            continue
+        if (
+            i > 0
+            and text[i - 1] == "!"
+            and not is_backslash_escaped(text, i - 1)
+        ):
+            i += 1
+            continue
+
+        label_close = find_label_close(text, i)
+        if (
+            label_close is None
+            or label_close + 1 >= len(text)
+            or text[label_close + 1] != "("
+        ):
+            i += 1
+            continue
+
+        destination = inline_link_destination(text, label_close + 1)
+        link_end = find_inline_link_end(text, label_close + 1)
+        if destination is not None and link_end is not None:
+            destinations.append(commonmark_unescape(destination))
+            i = link_end
+            continue
+        i += 1
+    return destinations
+
+
 def source_text_has_identity(line: str, sources_root: Path) -> bool:
     if SOURCE_URL_RE.search(line) or SOURCE_DOI_RE.search(line):
         return True
@@ -1471,13 +1555,21 @@ def source_section_has_identity(lines: list[str]) -> bool:
     for index, raw in enumerate(visible):
         if index in hidden_reference_lines:
             continue
-        line = strip_inline_html_constructs(raw.strip())
-        line = commonmark_unescape_outside_code_spans(line)
+
+        source = strip_inline_html_constructs(raw.strip())
+        destinations_inline = inline_link_destinations(source)
+        visible_source = strip_inline_links(source)
+        line = commonmark_unescape_outside_code_spans(visible_source)
+
         if not line or SOURCE_PLACEHOLDER_RE.fullmatch(line):
             continue
-        rendered_source_lines.append(raw)
+        rendered_source_lines.append(source)
         if source_text_has_identity(line, sources_root):
             return True
+        for destination in destinations_inline:
+            rendered_destination = commonmark_unescape_outside_code_spans(destination)
+            if source_text_has_identity(rendered_destination, sources_root):
+                return True
 
     used_labels = used_reference_labels("\n".join(rendered_source_lines))
     for label in used_labels:
@@ -1723,13 +1815,25 @@ for doc_name in ("README.md", "CATALOG.md"):
             )
 
 catalog = (ROOT / "CATALOG.md").read_text(encoding="utf-8")
-visible_catalog = strip_inline_html_constructs(visible_text(catalog))
+catalog_html_text: list[str] = []
+visible_catalog = "\n".join(
+    visible_nonfenced_lines(
+        markdown_source_lines(catalog),
+        raw_html_text=catalog_html_text,
+    )
+)
+visible_catalog = strip_inline_html_constructs(visible_catalog)
 previous_catalog = None
 while visible_catalog != previous_catalog:
     previous_catalog = visible_catalog
     visible_catalog = strip_inline_links(visible_catalog)
 visible_catalog = decode_visible_character_references(visible_catalog)
+
+visible_html_catalog = decode_visible_character_references(
+    "\n".join(catalog_html_text)
+)
 catalog_ids = set(OPT_TOKEN_RE.findall(visible_catalog))
+catalog_ids.update(OPT_TOKEN_RE.findall(visible_html_catalog))
 unknown_catalog_ids = sorted(catalog_ids - records.keys())
 if unknown_catalog_ids:
     die(f"CATALOG.md references unknown visible record ID(s): {', '.join(unknown_catalog_ids)}")
