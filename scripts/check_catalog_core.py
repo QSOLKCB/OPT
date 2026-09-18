@@ -105,9 +105,9 @@ REFERENCE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[[^\]]*\]")
 REFERENCE_LINK_RE = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
 INLINE_HTML_TAG_RE = re.compile(
     r"</?[A-Za-z][A-Za-z0-9-]*"
-    r"(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*"
-    r"(?:[ \t]*=[ \t]*(?:\"[^\"]*\"|'[^']*'|[^ \t\n\"'=<>`]+))?)*"
-    r"[ \t]*/?>"
+    r"(?:[ \t\r\n]+[A-Za-z_:][A-Za-z0-9_.:-]*"
+    r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\"[^\"]*\"|'[^']*'|[^ \t\r\n\"'=<>\\x60]+))?)*"
+    r"[ \t\r\n]*/?>"
 )
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
 SECTION_BOUNDARY_RE = re.compile(r"^#{1,2}(?:\s|$)")
@@ -232,11 +232,25 @@ def list_item_content(raw: str) -> tuple[int, str] | None:
         spacing_columns += width
     effective_spacing = spacing_columns if 0 < spacing_columns <= 4 else 1
     content_indent = marker_start + marker_width + effective_spacing
-    return content_indent, raw[match.end() :]
+    excess_padding = max(0, spacing_columns - effective_spacing)
+    return content_indent, (" " * excess_padding) + raw[match.end() :]
+
+
+CHARACTER_REFERENCE_RE = re.compile(
+    r"&(?:#[xX][0-9A-Fa-f]{1,6}|#[0-9]{1,7}|[A-Za-z][A-Za-z0-9]{0,31});"
+)
+
+
+def decode_character_references(value: str) -> str:
+    """Decode only semicolon-terminated CommonMark character references."""
+    return CHARACTER_REFERENCE_RE.sub(
+        lambda match: html.unescape(match.group(0)),
+        value,
+    )
 
 
 def commonmark_unescape(value: str) -> str:
-    """Unescape punctuation and decode character references."""
+    """Unescape punctuation and strict CommonMark character references."""
     out: list[str] = []
     index = 0
     while index < len(value):
@@ -251,36 +265,52 @@ def commonmark_unescape(value: str) -> str:
             continue
         out.append(char)
         index += 1
-    return html.unescape("".join(out))
+    return decode_character_references("".join(out))
+
+
+def inline_html_comment_end(text: str, index: int) -> int | None:
+    """Return the end of a valid CommonMark inline HTML comment."""
+    if not text.startswith("<!--", index) or is_backslash_escaped(text, index):
+        return None
+    end = text.find("-->", index + 4)
+    if end < 0:
+        return None
+    body = text[index + 4 : end]
+    if body.startswith(">") or body.startswith("->"):
+        return None
+    if "--" in body or body.endswith("-"):
+        return None
+    return end + 3
 
 
 def strip_inline_html_comments(raw: str, in_comment: bool) -> tuple[str, bool]:
-    """Strip real inline HTML comments while preserving escaped openers."""
+    """Strip valid inline HTML comments while preserving invalid/escaped openers."""
     out: list[str] = []
     cursor = 0
 
     if in_comment:
         end = raw.find("-->")
         if end < 0:
+            if "--" in raw:
+                return raw, False
             return "", True
+        if "--" in raw[:end] or raw[:end].endswith("-"):
+            return raw, False
         cursor = end + 3
         in_comment = False
 
     while cursor < len(raw):
         start = raw.find("<!--", cursor)
-        while start >= 0 and is_backslash_escaped(raw, start):
-            out.append(raw[cursor : start + 1])
-            cursor = start + 1
-            start = raw.find("<!--", cursor)
         if start < 0:
             out.append(raw[cursor:])
             break
+        end = inline_html_comment_end(raw, start)
+        if end is None:
+            out.append(raw[cursor : start + 1])
+            cursor = start + 1
+            continue
         out.append(raw[cursor:start])
-        end = raw.find("-->", start + 4)
-        if end < 0:
-            in_comment = True
-            break
-        cursor = end + 3
+        cursor = end
 
     return "".join(out), in_comment
 
