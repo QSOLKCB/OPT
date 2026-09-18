@@ -773,7 +773,7 @@ def canonicalize_type7_html_paragraph_interruptions(text: str) -> str:
     return "".join(out)
 
 
-ORDERED_LIST_LINE_RE = re.compile(r"^ {0,3}(?P<number>\d+)[.)][ \t]+")
+ORDERED_LIST_LINE_RE = re.compile(r"^ {0,3}(?P<number>\d{1,9})[.)][ \t]+")
 
 
 def _line_interrupts_open_paragraph(line: str, paragraph_open: bool) -> bool:
