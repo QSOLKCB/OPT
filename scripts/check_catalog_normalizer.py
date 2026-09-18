@@ -11,7 +11,6 @@ or overlooks, and runs the core against that copy:
 * block-quoted link-reference definitions that actually parse as definitions,
 * classification placeholders hidden behind rendering-only inline formatting,
 * generic TODO/TBD-style required-field placeholders,
-* hash-shaped source text that lacks explicit commit/revision context,
 * type-7 raw-HTML tags that CommonMark keeps inside an already-open paragraph,
 * thematic breaks after paragraph-interrupting blocks that are not Setext headings, and
 * heading-shaped suffixes after multiline inline comments that remain paragraph text.
@@ -996,7 +995,6 @@ def canonicalize_markdown(text: str, *, link_scan_document: bool) -> str:
     text = canonicalize_nonsetext_thematic_breaks(text)
     text = canonicalize_classification_placeholders(text)
     text = canonicalize_generic_required_placeholders(text)
-    text = canonicalize_ambiguous_commit_tokens(text)
     if link_scan_document:
         text = canonicalize_angle_record_destinations(text)
         text = mask_inline_code_record_destinations(text)
