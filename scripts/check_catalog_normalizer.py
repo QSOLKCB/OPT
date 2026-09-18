@@ -5,7 +5,7 @@ The core checker intentionally stays strict and source-oriented. This front end 
 scratch copy, canonicalizes rendering-equivalent forms that the core otherwise rejects
 or overlooks, and runs the core against that copy:
 
-* one-to-three spaces before ATX headings (valid CommonMark indentation),
+* one-to-three spaces before top-level ATX headings (valid CommonMark indentation),
 * optional Markdown titles and angle-bracket destinations on record links,
 * inline-code examples that resemble optimization-record links,
 * block-quoted link-reference definitions that actually parse as definitions,
@@ -36,6 +36,9 @@ ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 ATX_SUFFIX_RE = re.compile(r"^(?P<indent> {0,3})(?P<hashes>#{1,6})(?=[ \t]|$)")
 FENCE_LINE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
 LIST_BLOCK_RE = re.compile(r"^ {0,3}(?:[-+*]|\d+[.)])[ \t]+")
+LIST_ITEM_RE = re.compile(
+    r"^(?P<indent> *)(?P<marker>[-+*]|\\d+[.)])(?P<spacing>[ \\t]+)"
+)
 THEMATIC_BREAK_RE = re.compile(
     r"^ {0,3}(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
 )
@@ -372,6 +375,80 @@ def _line_can_open_or_continue_paragraph(line: str) -> bool:
     return True
 
 
+def _list_item_layout(line: str) -> tuple[int, int] | None:
+    """Return marker/content columns for a Markdown list item."""
+    match = LIST_ITEM_RE.match(line)
+    if match is None:
+        return None
+
+    marker_indent = len(match.group("indent"))
+    marker_width = len(match.group("marker"))
+    column = marker_indent + marker_width
+    spacing_columns = 0
+    for char in match.group("spacing"):
+        width = 4 - (column % 4) if char == "\t" else 1
+        column += width
+        spacing_columns += width
+
+    if spacing_columns <= 0:
+        return None
+    effective_spacing = spacing_columns if spacing_columns <= 4 else 1
+    return marker_indent, marker_indent + marker_width + effective_spacing
+
+
+def canonicalize_top_level_atx_indentation(text: str) -> str:
+    """Deindent only ATX headings that CommonMark renders outside list items."""
+    out: list[str] = []
+    list_content_indents: list[int] = []
+    previous_blank = False
+
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+
+        if not content.strip():
+            out.append(raw)
+            previous_blank = True
+            continue
+
+        list_layout = _list_item_layout(content)
+        if list_layout is not None:
+            marker_indent, content_indent = list_layout
+            while list_content_indents and marker_indent < list_content_indents[-1]:
+                list_content_indents.pop()
+
+            if not list_content_indents:
+                if marker_indent <= 3:
+                    list_content_indents.append(content_indent)
+            elif marker_indent >= list_content_indents[-1]:
+                list_content_indents.append(content_indent)
+
+            out.append(raw)
+            previous_blank = False
+            continue
+
+        leading_spaces = len(content) - len(content.lstrip(" "))
+        block_interrupt = bool(
+            ATX_HEADING_RE.match(content)
+            or FENCE_LINE_RE.match(content)
+            or THEMATIC_BREAK_RE.fullmatch(content)
+            or BLOCKQUOTE_PREFIX_RE.match(content)
+            or _standalone_html_tag_name(content) is not None
+        )
+        if list_content_indents and (previous_blank or block_interrupt):
+            while list_content_indents and leading_spaces < list_content_indents[-1]:
+                list_content_indents.pop()
+
+        atx_indent = ATX_INDENT_RE.match(content)
+        if atx_indent is not None and not list_content_indents:
+            content = content[atx_indent.end() :]
+
+        out.append(content + ending)
+        previous_blank = False
+
+    return "".join(out)
+
+
 def canonicalize_nested_reference_definitions(text: str) -> str:
     """Expose only quoted reference definitions that CommonMark parses as definitions."""
     out: list[str] = []
@@ -644,7 +721,7 @@ def canonicalize_ambiguous_commit_tokens(text: str) -> str:
 
 
 def canonicalize_markdown(text: str, *, link_scan_document: bool) -> str:
-    text = ATX_INDENT_RE.sub("", text)
+    text = canonicalize_top_level_atx_indentation(text)
     text = canonicalize_multiline_inline_comment_context(text)
     text = canonicalize_nested_reference_definitions(text)
     text = canonicalize_type7_html_paragraph_interruptions(text)

@@ -529,13 +529,14 @@ def markdown_table_cells(line: str) -> list[str] | None:
     if is_indented_code_line(line):
         return None
     stripped = line.strip()
-    if not stripped.startswith("|"):
+    if not stripped:
         return None
 
     cells: list[str] = []
     current: list[str] = []
     code_run_len: int | None = None
-    i = 1
+    saw_delimiter = stripped.startswith("|")
+    i = 1 if saw_delimiter else 0
     while i < len(stripped):
         char = stripped[i]
         if char == "`" and not is_backslash_escaped(stripped, i):
@@ -554,6 +555,7 @@ def markdown_table_cells(line: str) -> list[str] | None:
                     current.pop()
                 current.append("|")
             else:
+                saw_delimiter = True
                 cells.append("".join(current).strip())
                 current = []
             i += 1
@@ -561,6 +563,9 @@ def markdown_table_cells(line: str) -> list[str] | None:
 
         current.append(char)
         i += 1
+
+    if not saw_delimiter:
+        return None
 
     trailing_pipe_is_delimiter = (
         stripped.endswith("|") and not is_backslash_escaped(stripped, len(stripped) - 1)

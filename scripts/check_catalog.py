@@ -83,7 +83,8 @@ def _reference_destinations(text: str) -> dict[str, str]:
         if destination.startswith("<") and destination.endswith(">"):
             destination = destination[1:-1]
         destination = re.sub(r"\\(.)", r"\1", destination)
-        destinations[_normalized_reference_label(match.group("label"))] = destination
+        normalized_label = _normalized_reference_label(match.group("label"))
+        destinations.setdefault(normalized_label, destination)
     return destinations
 
 

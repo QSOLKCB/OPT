@@ -12,14 +12,14 @@ Before any of these become catalog records, add a pinned VORTEX-N source note wi
 
 **Problem:** logically independent work is forced through atomics, locks, collision arbitration or serialized mutation because some operations can touch the same state.
 
-**Reusable mechanism:** build or derive a conflict/dependency graph, partition operations into independent sets such as matchings/color classes, and execute one conflict-free phase in parallel so no two operations in that phase mutate the same logical state.
+**Reusable mechanism:** build or derive a conflict/dependency graph over each operation's complete read set, write set and externally observable effects; partition operations into independent sets such as matchings/color classes; and execute one phase in parallel only when it contains no write/write, write/read, read/write or observable-effect hazards.
 
 **Why it looks promising:** this can replace runtime contention with an explicit scheduling transform. The pattern is applicable to graph processing, mesh/constraint updates, particle or interaction systems, sparse mutation, schedulers and other workloads where write conflicts are structurally knowable.
 
 **Evidence gate before promotion:**
 
-- prove the partition really removes conflicting simultaneous writes for the declared operation model;
-- compare against the canonical/reference semantics, including ordering where observable;
+- prove the partition removes all declared write/write, write/read, read/write and observable-effect hazards for the operation model;
+- compare scalar/serial and partitioned-parallel execution against the same canonical/reference semantics, including ordering where observable;
 - measure scheduling/partition overhead as well as lock/atomic reduction;
 - test skewed or adversarial graphs where the number of phases grows;
 - do not assume the donor's number of matchings or graph topology transfers to another target.
@@ -70,7 +70,7 @@ Regenerate deterministic control/schedule state from compact seeds or round/cell
 
 ### Exact inverse/replay verification
 
-Where an optimized transformation is reversible, use forward-then-inverse replay as a strong correctness oracle and require restoration of the original state under the declared exactness contract. This is valuable validation guidance, but it is not automatically a performance optimization and should not be promoted as one without an independent objective win.
+Where an optimized transformation is reversible, use forward-then-inverse replay as supplementary correctness evidence and require restoration of the original state under the declared exactness contract. Also require a forward-result oracle—direct parity with a trusted reference output or independent semantic invariants—so mutually consistent forward/inverse defects cannot pass merely because they round-trip. This is valuable validation guidance, but it is not automatically a performance optimization and should not be promoted as one without an independent objective win.
 
 ## Promotion rule
 
