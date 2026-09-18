@@ -97,7 +97,7 @@ LINK_REFERENCE_DEFINITION_RE = re.compile(
 LINK_REFERENCE_TITLE_CONTINUATION_RE = re.compile(
     r"^ {0,3}(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))[ \t]*$"
 )
-SOURCE_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+SOURCE_URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
 SOURCE_DOI_RE = re.compile(r"\b(?:doi:\s*)?10\.\d{4,9}/\S+", re.IGNORECASE)
 SOURCE_COMMIT_RE = re.compile(r"\b[0-9a-f]{7,40}\b", re.IGNORECASE)
 SOURCE_COMMIT_CONTEXT_RE = re.compile(
@@ -1411,6 +1411,70 @@ HTML_HREF_RE = re.compile(
 )
 
 
+def strip_preformatted_html_scan_contents(text: str) -> str:
+    """Remove pre/textarea contents from scans that look for active HTML markup."""
+    out: list[str] = []
+    index = 0
+
+    while index < len(text):
+        tag_start = text.find("<", index)
+        if tag_start < 0:
+            out.append(text[index:])
+            break
+
+        tag = INLINE_HTML_TAG_RE.match(text, tag_start)
+        if tag is None:
+            out.append(text[index : tag_start + 1])
+            index = tag_start + 1
+            continue
+
+        source = tag.group(0)
+        opener = re.match(
+            r"<(?P<tag>pre|textarea)(?:[ \t\r\n/>]|$)",
+            source,
+            re.IGNORECASE,
+        )
+        if opener is None or source.startswith("</"):
+            out.append(text[index : tag.end()])
+            index = tag.end()
+            continue
+
+        out.append(text[index : tag.end()])
+        raw_tag = opener.group("tag")
+        cursor = tag.end()
+        closed = False
+
+        while cursor < len(text):
+            candidate_start = text.find("<", cursor)
+            if candidate_start < 0:
+                index = len(text)
+                closed = True
+                break
+
+            candidate = INLINE_HTML_TAG_RE.match(text, candidate_start)
+            if candidate is None:
+                cursor = candidate_start + 1
+                continue
+
+            candidate_source = candidate.group(0)
+            if re.fullmatch(
+                rf"</{re.escape(raw_tag)}[ \t\r\n]*>",
+                candidate_source,
+                re.IGNORECASE,
+            ):
+                out.append(candidate_source)
+                index = candidate.end()
+                closed = True
+                break
+
+            cursor = candidate.end()
+
+        if not closed:
+            index = len(text)
+
+    return "".join(out)
+
+
 def html_anchor_label_extent(
     text: str, content_start: int
 ) -> tuple[int, int] | None:
@@ -1423,7 +1487,7 @@ def html_anchor_label_extent(
     while cursor < len(text):
         tag_start = text.find("<", cursor)
         if tag_start < 0:
-            return None
+            return len(text), len(text)
 
         tag = INLINE_HTML_TAG_RE.match(text, tag_start)
         if tag is None:
@@ -2160,8 +2224,25 @@ def valid_repository_identity(owner: str, repo: str) -> bool:
     token = f"{owner}/{repo}".lower()
     if token in SOURCE_REPOSITORY_PLACEHOLDERS:
         return False
+
     placeholder_parts = {"none", "unknown", "tbd", "todo", "pending"}
-    return owner.lower() not in placeholder_parts and repo.lower() not in placeholder_parts
+    if owner.lower() in placeholder_parts or repo.lower() in placeholder_parts:
+        return False
+
+    if re.fullmatch(
+        r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?",
+        owner,
+    ) is None:
+        return False
+
+    if (
+        repo in {".", ".."}
+        or re.fullmatch(r"[A-Za-z0-9._-]+", repo) is None
+        or not any(char.isalnum() for char in repo)
+    ):
+        return False
+
+    return True
 
 
 def source_text_has_direct_identity(line: str) -> bool:
@@ -2643,7 +2724,9 @@ def record_fragment_ids(path: Path) -> set[str]:
         )
     )
 
-    raw_block_html_source = "\n".join(raw_html_source)
+    raw_block_html_source = strip_preformatted_html_scan_contents(
+        "\n".join(raw_html_source)
+    )
     anchors.update(
         collect_explicit_html_anchors(
             raw_block_html_source,
@@ -2683,7 +2766,10 @@ for doc_name in ("README.md", "CATALOG.md"):
     record_links = visible_record_links(rendered)
     rendered_html_scan, _protected_html_code = protect_code_spans(rendered)
     record_links.extend(visible_html_record_links(rendered_html_scan))
-    record_links.extend(visible_html_record_links("\n".join(raw_html_source)))
+    raw_html_link_scan = strip_preformatted_html_scan_contents(
+        "\n".join(raw_html_source)
+    )
+    record_links.extend(visible_html_record_links(raw_html_link_scan))
     for label, destination in record_links:
         rel, separator, fragment = destination.partition("#")
         if not rel.startswith("optimizations/") or not rel.endswith(".md"):
