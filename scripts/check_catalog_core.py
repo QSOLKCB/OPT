@@ -8,6 +8,7 @@ import ipaddress
 from html.entities import html5 as HTML5_ENTITIES
 import re
 import string
+import unicodedata
 from collections import Counter
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -1280,6 +1281,37 @@ HTML_HREF_RE = re.compile(
 )
 
 
+def html_anchor_label_extent(
+    text: str, content_start: int
+) -> tuple[int, int] | None:
+    """Return rendered label end and next scan index for one HTML anchor.
+
+    A nested anchor start implicitly closes the current anchor. Only parsed HTML
+    tokens participate, so '</a>' text inside quoted attributes is ignored.
+    """
+    cursor = content_start
+    while cursor < len(text):
+        tag_start = text.find("<", cursor)
+        if tag_start < 0:
+            return None
+
+        tag = INLINE_HTML_TAG_RE.match(text, tag_start)
+        if tag is None:
+            cursor = tag_start + 1
+            continue
+
+        source = tag.group(0)
+        if re.match(r"<a(?:[ \t\r\n]|>)", source, re.IGNORECASE):
+            return tag_start, tag_start
+
+        if re.fullmatch(r"</a[ \t\r\n]*>", source, re.IGNORECASE):
+            return tag_start, tag.end()
+
+        cursor = tag.end()
+
+    return None
+
+
 def html_anchor_links(text: str) -> list[tuple[str, str]]:
     """Return rendered anchor labels paired with decoded href destinations."""
     links: list[tuple[str, str]] = []
@@ -1304,22 +1336,13 @@ def html_anchor_links(text: str) -> list[tuple[str, str]]:
             continue
         href = next(value for value in href_match.groups() if value is not None)
 
-        tail = text[tag.end() :]
-        close = re.search(r"</a[ \t\r\n]*>", tail, re.IGNORECASE)
-        if close is None:
+        extent = html_anchor_label_extent(text, tag.end())
+        if extent is None:
             index = tag.end()
             continue
+        label_end, next_index = extent
 
-        nested = re.search(r"<a(?:[ \t\r\n]|>)", tail, re.IGNORECASE)
-        label_start = tag.end()
-        if nested is not None and nested.start() < close.start():
-            label_end = tag.end() + nested.start()
-            next_index = tag.end() + nested.start()
-        else:
-            label_end = tag.end() + close.start()
-            next_index = tag.end() + close.end()
-
-        label = rendered_inline_text(text[label_start:label_end])
+        label = rendered_inline_text(text[tag.end():label_end])
         links.append((label, decode_html_attribute_references(href)))
         index = next_index
 
@@ -1362,22 +1385,13 @@ def visible_html_record_links(text: str) -> list[tuple[str, str]]:
             value for value in href_match.groups() if value is not None
         )
 
-        tail = text[tag.end() :]
-        close = re.search(r"</a[ \t\r\n]*>", tail, re.IGNORECASE)
-        if close is None:
+        extent = html_anchor_label_extent(text, tag.end())
+        if extent is None:
             index = tag.end()
             continue
+        label_end, next_index = extent
 
-        nested = re.search(r"<a(?:[ \t\r\n]|>)", tail, re.IGNORECASE)
-        label_start = tag.end()
-        if nested is not None and nested.start() < close.start():
-            label_end = tag.end() + nested.start()
-            next_index = tag.end() + nested.start()
-        else:
-            label_end = tag.end() + close.start()
-            next_index = tag.end() + close.end()
-
-        rendered_label = rendered_inline_text(text[label_start:label_end])
+        rendered_label = rendered_inline_text(text[tag.end():label_end])
         if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label):
             links.append((rendered_label, decode_html_attribute_references(href)))
 
@@ -1503,8 +1517,11 @@ def extract_markdown_table(
                     f"{context} table row has {len(cells)} column(s); "
                     f"expected {len(expected)}: {row.strip()}"
                 )
-            if any(not cell for cell in cells):
-                die(f"{context} table row contains an empty required cell: {row.strip()}")
+            if any(not has_substantive_rendered_text(cell) for cell in cells):
+                die(
+                    f"{context} table row contains an empty/non-substantive "
+                    f"rendered cell: {row.strip()}"
+                )
             rows.append(cells)
         return rows
     die(f"{context} is missing the expected Markdown table")
@@ -2280,15 +2297,25 @@ for path in sorted(OPT_DIR.glob("*.md")):
         )
     status_categories[record_id] = status_category
 
-    headings = {
+    heading_counts = Counter(
         rendered
         for line in lines
         if (rendered := normalized_visible_heading(line)) is not None
         and rendered.startswith("## ")
-    }
-    missing = sorted(REQUIRED_V2 - headings)
+    )
+    missing = sorted(
+        heading for heading in REQUIRED_V2 if heading_counts[heading] == 0
+    )
     if missing:
         die(f"{path.relative_to(ROOT)} missing visible sections: {', '.join(missing)}")
+    duplicated = sorted(
+        heading for heading in REQUIRED_V2 if heading_counts[heading] > 1
+    )
+    if duplicated:
+        die(
+            f"{path.relative_to(ROOT)} has duplicate mandatory sections: "
+            f"{', '.join(duplicated)}"
+        )
 
     for heading in sorted(REQUIRED_V2):
         if not section_has_content(
@@ -2370,7 +2397,17 @@ def collect_explicit_html_anchors(
 def github_heading_slug(value: str) -> str:
     """Approximate GitHub's rendered heading fragment for repository headings."""
     value = rendered_inline_text(value).strip().lower()
-    value = re.sub(r"[^\w\- ]+", "", value, flags=re.UNICODE)
+    value = "".join(
+        char
+        for char in value
+        if (
+            char == "-"
+            or char == "_"
+            or char.isspace()
+            or char.isalnum()
+            or unicodedata.category(char).startswith("M")
+        )
+    )
     value = re.sub(r"[ \t\r\n]+", "-", value)
     return value
 
