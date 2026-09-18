@@ -1280,9 +1280,9 @@ HTML_HREF_RE = re.compile(
 )
 
 
-def html_anchor_hrefs(text: str) -> list[str]:
-    """Return decoded href values from syntactically valid HTML anchor start tags."""
-    hrefs: list[str] = []
+def html_anchor_links(text: str) -> list[tuple[str, str]]:
+    """Return rendered anchor labels paired with decoded href destinations."""
+    links: list[tuple[str, str]] = []
     index = 0
     while index < len(text):
         start = text.find("<", index)
@@ -1292,14 +1292,47 @@ def html_anchor_hrefs(text: str) -> list[str]:
         if tag is None:
             index = start + 1
             continue
+
         tag_source = tag.group(0)
-        if re.match(r"<a(?:[ \t\r\n]|>)", tag_source, re.IGNORECASE):
-            href_match = HTML_HREF_RE.search(tag_source)
-            if href_match is not None:
-                href = next(value for value in href_match.groups() if value is not None)
-                hrefs.append(decode_html_attribute_references(href))
-        index = tag.end()
-    return hrefs
+        if re.match(r"<a(?:[ \t\r\n]|>)", tag_source, re.IGNORECASE) is None:
+            index = tag.end()
+            continue
+
+        href_match = HTML_HREF_RE.search(tag_source)
+        if href_match is None:
+            index = tag.end()
+            continue
+        href = next(value for value in href_match.groups() if value is not None)
+
+        tail = text[tag.end() :]
+        close = re.search(r"</a[ \t\r\n]*>", tail, re.IGNORECASE)
+        if close is None:
+            index = tag.end()
+            continue
+
+        nested = re.search(r"<a(?:[ \t\r\n]|>)", tail, re.IGNORECASE)
+        label_start = tag.end()
+        if nested is not None and nested.start() < close.start():
+            label_end = tag.end() + nested.start()
+            next_index = tag.end() + nested.start()
+        else:
+            label_end = tag.end() + close.start()
+            next_index = tag.end() + close.end()
+
+        label = rendered_inline_text(text[label_start:label_end])
+        links.append((label, decode_html_attribute_references(href)))
+        index = next_index
+
+    return links
+
+
+def html_anchor_hrefs(text: str) -> list[str]:
+    """Return decoded hrefs for anchors with substantive rendered labels."""
+    return [
+        destination
+        for label, destination in html_anchor_links(text)
+        if has_substantive_rendered_text(label)
+    ]
 
 
 def visible_html_record_links(text: str) -> list[tuple[str, str]]:
@@ -1748,9 +1781,9 @@ def reference_definition_destinations(lines: list[str]) -> dict[str, str]:
     return reference_definition_scan(lines)[1]
 
 
-def used_reference_labels(text: str) -> set[str]:
-    """Return rendered reference labels used by full, collapsed, or shortcut links."""
-    labels: set[str] = set()
+def used_reference_links(text: str) -> list[tuple[str, str]]:
+    """Return normalized reference keys paired with rendered link labels."""
+    links: list[tuple[str, str]] = []
     protected_text, _protected_code = protect_code_spans(text)
     i = 0
     while i < len(protected_text):
@@ -1775,7 +1808,8 @@ def used_reference_labels(text: str) -> set[str]:
             i += 1
             continue
 
-        label = protected_text[i + 1 : label_close]
+        label_source = protected_text[i + 1 : label_close]
+        rendered_label = rendered_inline_text(label_source)
         after = label_close + 1
 
         if after < len(protected_text) and protected_text[after] == "(":
@@ -1786,15 +1820,23 @@ def used_reference_labels(text: str) -> set[str]:
         if after < len(protected_text) and protected_text[after] == "[":
             reference_close = find_label_close(protected_text, after)
             if reference_close is not None:
-                reference = protected_text[after + 1 : reference_close] or label
-                labels.add(normalized_reference_label(reference))
+                reference = protected_text[after + 1 : reference_close] or label_source
+                links.append(
+                    (normalized_reference_label(reference), rendered_label)
+                )
                 i = reference_close + 1
                 continue
 
-        labels.add(normalized_reference_label(label))
+        links.append(
+            (normalized_reference_label(label_source), rendered_label)
+        )
         i = label_close + 1
 
-    return labels
+    return links
+
+
+def used_reference_labels(text: str) -> set[str]:
+    return {reference for reference, _label in used_reference_links(text)}
 
 
 def is_structural_only_line(line: str) -> bool:
@@ -1869,6 +1911,50 @@ def inline_link_destinations(text: str) -> list[str]:
             continue
         i += 1
     return destinations
+
+
+
+def inline_link_destination_pairs(text: str) -> list[tuple[str, str]]:
+    """Return rendered labels paired with valid inline-link destinations."""
+    links: list[tuple[str, str]] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "<":
+            html_end = inline_html_construct_end(text, i)
+            if html_end is not None:
+                i = html_end
+                continue
+        if text[i] != "[" or is_backslash_escaped(text, i):
+            i += 1
+            continue
+        if (
+            i > 0
+            and text[i - 1] == "!"
+            and not is_backslash_escaped(text, i - 1)
+        ):
+            i += 1
+            continue
+
+        label_close = find_label_close(text, i)
+        if (
+            label_close is None
+            or label_close + 1 >= len(text)
+            or text[label_close + 1] != "("
+        ):
+            i += 1
+            continue
+
+        destination = inline_link_destination(text, label_close + 1)
+        link_end = find_inline_link_end(text, label_close + 1)
+        if destination is None or link_end is None:
+            i += 1
+            continue
+
+        label = rendered_inline_text(text[i + 1 : label_close])
+        links.append((label, commonmark_unescape(destination)))
+        i = link_end
+
+    return links
 
 
 def valid_http_source_url(value: str) -> bool:
@@ -1950,8 +2036,8 @@ def source_note_has_identity(path: Path, sources_root: Path) -> bool:
         honor_backslash_escapes=True,
     )
 
-    html_destinations = html_anchor_hrefs(source)
-    inline_destinations = inline_link_destinations(source)
+    html_links = html_anchor_links(source)
+    inline_links = inline_link_destination_pairs(source)
     rendered = commonmark_unescape_outside_code_spans(
         strip_inline_links(strip_inline_html_constructs(source))
     )
@@ -1960,10 +2046,11 @@ def source_note_has_identity(path: Path, sources_root: Path) -> bool:
         return True
 
     return any(
-        source_text_has_direct_identity(
+        has_substantive_rendered_text(label)
+        and source_text_has_direct_identity(
             commonmark_unescape_outside_code_spans(destination)
         )
-        for destination in (*html_destinations, *inline_destinations)
+        for label, destination in (*html_links, *inline_links)
     )
 
 
@@ -2004,9 +2091,9 @@ def source_section_has_identity(lines: list[str]) -> bool:
         None,
         honor_backslash_escapes=True,
     )
-    html_destinations = html_anchor_hrefs(source)
+    html_links = html_anchor_links(source)
     source = strip_inline_html_constructs(source)
-    destinations_inline = inline_link_destinations(source)
+    inline_links = inline_link_destination_pairs(source)
     visible_source = strip_inline_links(source)
     rendered_source = commonmark_unescape_outside_code_spans(visible_source)
 
@@ -2017,14 +2104,17 @@ def source_section_has_identity(lines: list[str]) -> bool:
     ):
         return True
 
-    for destination in (*html_destinations, *destinations_inline):
+    for label, destination in (*html_links, *inline_links):
+        if not has_substantive_rendered_text(label):
+            continue
         rendered_destination = commonmark_unescape_outside_code_spans(destination)
         if source_text_has_identity(rendered_destination, sources_root):
             return True
 
-    used_labels = used_reference_labels(source)
-    for label in used_labels:
-        destination = destinations.get(label)
+    for reference, label in used_reference_links(source):
+        if not has_substantive_rendered_text(label):
+            continue
+        destination = destinations.get(reference)
         if destination is None:
             continue
         rendered_destination = commonmark_unescape_outside_code_spans(destination)
@@ -2034,12 +2124,57 @@ def source_section_has_identity(lines: list[str]) -> bool:
     return False
 
 
-def status_category_source(raw: str) -> str:
+def render_resolved_reference_links(
+    text: str, definitions: set[str]
+) -> str:
+    """Render only reference links whose definitions actually resolve."""
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] != "[" or is_backslash_escaped(text, i):
+            out.append(text[i])
+            i += 1
+            continue
+
+        label_close = find_label_close(text, i)
+        if label_close is None:
+            out.append(text[i])
+            i += 1
+            continue
+
+        label = text[i + 1 : label_close]
+        after = label_close + 1
+
+        if after < len(text) and text[after] == "[":
+            reference_close = find_label_close(text, after)
+            if reference_close is not None:
+                reference = text[after + 1 : reference_close] or label
+                if normalized_reference_label(reference) in definitions:
+                    out.append(label)
+                    i = reference_close + 1
+                    continue
+
+        shortcut = normalized_reference_label(label)
+        if shortcut in definitions:
+            out.append(label)
+            i = label_close + 1
+            continue
+
+        out.append(text[i : label_close + 1])
+        i = label_close + 1
+
+    return "".join(out)
+
+
+def status_category_source(
+    raw: str, reference_definitions: set[str] | None = None
+) -> str:
     """Return the rendered status category before its visible caveat separator."""
     rendered, protected_code = protect_code_spans(raw)
     rendered = strip_inline_links(rendered)
-    rendered = REFERENCE_IMAGE_RE.sub(lambda match: match.group(1), rendered)
-    rendered = REFERENCE_LINK_RE.sub(lambda match: match.group(1), rendered)
+    rendered = render_resolved_reference_links(
+        rendered, reference_definitions or set()
+    )
     rendered, _hidden_tag = strip_nonrendering_html_regions(
         rendered,
         None,
@@ -2056,8 +2191,10 @@ def status_category_source(raw: str) -> str:
     return category
 
 
-def normalized_status_category(raw: str) -> str:
-    return status_category_source(raw).strip()
+def normalized_status_category(
+    raw: str, reference_definitions: set[str] | None = None
+) -> str:
+    return status_category_source(raw, reference_definitions).strip()
 
 
 def require_prefixed_fields(
@@ -2132,7 +2269,10 @@ for path in sorted(OPT_DIR.glob("*.md")):
     if record_id in FROZEN_V1:
         continue
 
-    status_category = normalized_status_category(statuses[0])
+    _hidden_status_definitions, status_definitions = reference_definition_scan(lines)
+    status_category = normalized_status_category(
+        statuses[0], set(status_definitions)
+    )
     if status_category not in ALLOWED_V2_STATUS_CATEGORIES:
         die(
             f"{path.relative_to(ROOT)} uses undefined status category "
