@@ -191,8 +191,52 @@ def strip_blockquote_prefixes(raw: str) -> str:
     return result
 
 
+def leading_columns(value: str) -> int:
+    columns = 0
+    for char in value:
+        if char == " ":
+            columns += 1
+        elif char == "\t":
+            columns += 4 - (columns % 4)
+        else:
+            break
+    return columns
+
+
+def strip_indent_columns(value: str, columns: int) -> str:
+    current = 0
+    index = 0
+    while index < len(value) and current < columns:
+        char = value[index]
+        if char == " ":
+            current += 1
+        elif char == "\t":
+            current += 4 - (current % 4)
+        else:
+            break
+        index += 1
+    return value[index:] if current >= columns else value
+
+
+def list_item_content(raw: str) -> tuple[int, str] | None:
+    match = re.match(r"^ {0,3}(?P<marker>[-+*]|\d+[.)])(?P<spacing>[ \t]+)", raw)
+    if match is None:
+        return None
+    marker_start = len(raw) - len(raw.lstrip(" "))
+    marker_width = len(match.group("marker"))
+    column = marker_start + marker_width
+    spacing_columns = 0
+    for char in match.group("spacing"):
+        width = 4 - (column % 4) if char == "\t" else 1
+        column += width
+        spacing_columns += width
+    effective_spacing = spacing_columns if 0 < spacing_columns <= 4 else 1
+    content_indent = marker_start + marker_width + effective_spacing
+    return content_indent, raw[match.end() :]
+
+
 def commonmark_unescape(value: str) -> str:
-    """Unescape only backslash-escapable ASCII punctuation."""
+    """Unescape punctuation and decode character references."""
     out: list[str] = []
     index = 0
     while index < len(value):
@@ -207,11 +251,11 @@ def commonmark_unescape(value: str) -> str:
             continue
         out.append(char)
         index += 1
-    return "".join(out)
+    return html.unescape("".join(out))
 
 
 def strip_inline_html_comments(raw: str, in_comment: bool) -> tuple[str, bool]:
-    """Strip inline HTML comments while carrying a mid-line unmatched comment."""
+    """Strip real inline HTML comments while preserving escaped openers."""
     out: list[str] = []
     cursor = 0
 
@@ -224,6 +268,10 @@ def strip_inline_html_comments(raw: str, in_comment: bool) -> tuple[str, bool]:
 
     while cursor < len(raw):
         start = raw.find("<!--", cursor)
+        while start >= 0 and is_backslash_escaped(raw, start):
+            out.append(raw[cursor : start + 1])
+            cursor = start + 1
+            start = raw.find("<!--", cursor)
         if start < 0:
             out.append(raw[cursor:])
             break
@@ -283,6 +331,8 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
     fence_char: str | None = None
     fence_len = 0
     fence_quote_depth = 0
+    fence_list_indent = 0
+    active_list_indent: int | None = None
     inline_comment = False
     html_mode: str | None = None
     html_end: str | None = None
@@ -297,21 +347,34 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
         quote_depth, block_raw = blockquote_depth_and_content(raw)
 
         if fence_char is not None:
-            if fence_quote_depth > 0 and quote_depth < fence_quote_depth:
+            quote_ended = fence_quote_depth > 0 and quote_depth < fence_quote_depth
+            list_ended = (
+                fence_list_indent > 0
+                and block_raw.strip()
+                and leading_columns(block_raw) < fence_list_indent
+            )
+            if quote_ended or list_ended:
                 fence_char = None
                 fence_len = 0
                 fence_quote_depth = 0
+                fence_list_indent = 0
                 boundary()
             else:
                 paragraph_open = False
+                fence_view = (
+                    strip_indent_columns(block_raw, fence_list_indent)
+                    if fence_list_indent > 0
+                    else block_raw
+                )
                 close = re.fullmatch(
                     rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*",
-                    block_raw,
+                    fence_view,
                 )
                 if close is not None:
                     fence_char = None
                     fence_len = 0
                     fence_quote_depth = 0
+                    fence_list_indent = 0
                 continue
 
         if html_mode is not None:
@@ -344,18 +407,34 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
 
         was_paragraph_open = paragraph_open
 
+        list_open = list_item_content(block_raw)
+        block_view = block_raw
+        current_list_indent = active_list_indent
+        if list_open is not None:
+            current_list_indent, block_view = list_open
+            active_list_indent = current_list_indent
+        elif active_list_indent is not None:
+            if block_raw.strip() and leading_columns(block_raw) >= active_list_indent:
+                block_view = strip_indent_columns(block_raw, active_list_indent)
+                current_list_indent = active_list_indent
+            elif block_raw.strip():
+                active_list_indent = None
+                current_list_indent = None
+        else:
+            current_list_indent = None
+
         if inline_comment:
             rendered, inline_comment = strip_inline_html_comments(raw, True)
             if inline_comment:
                 continue
             raw_for_parse = rendered
         else:
-            if is_indented_code_line(block_raw):
+            if is_indented_code_line(block_view):
                 if not paragraph_open:
                     continue
                 raw_for_parse = raw
             else:
-                opener = FENCE_OPEN_RE.match(block_raw)
+                opener = FENCE_OPEN_RE.match(block_view)
                 if opener is not None:
                     run = opener.group(1)
                     info = opener.group(2)
@@ -364,10 +443,11 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                         fence_char = run[0]
                         fence_len = len(run)
                         fence_quote_depth = quote_depth
+                        fence_list_indent = current_list_indent or 0
                         boundary()
                         continue
 
-                html_start = raw_html_block_start(block_raw)
+                html_start = raw_html_block_start(block_view)
                 if html_start is not None:
                     paragraph_open = False
                     boundary()
@@ -376,7 +456,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     if (
                         html_mode == "tag"
                         and html_end is not None
-                        and raw_html_tag_closes(block_raw, html_end)
+                        and raw_html_tag_closes(block_view, html_end)
                     ):
                         html_mode = None
                         html_end = None
@@ -384,7 +464,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     elif (
                         html_mode == "token"
                         and html_end is not None
-                        and html_end in block_raw
+                        and html_end in block_view
                     ):
                         html_mode = None
                         html_end = None
@@ -394,6 +474,10 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                 raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
 
         parse_view = strip_blockquote_prefixes(raw_for_parse)
+        if current_list_indent is not None and list_item_content(parse_view) is None:
+            if leading_columns(parse_view) >= current_list_indent:
+                parse_view = strip_indent_columns(parse_view, current_list_indent)
+
         if (
             raw_for_parse
             and is_indented_code_line(parse_view)
