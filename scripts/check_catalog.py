@@ -60,8 +60,20 @@ INVALID_REFERENCE_DESTINATION = "optimizations/__invalid_reference_destination__
 STATUS_WRAPPERS = ("**", "__", "~~", "*", "_", "`")
 
 
+CHARACTER_REFERENCE_RE = re.compile(
+    r"&(?:#[xX][0-9A-Fa-f]{1,6}|#[0-9]{1,7}|[A-Za-z][A-Za-z0-9]{0,31});"
+)
+
+
+def _decode_character_references(value: str) -> str:
+    return CHARACTER_REFERENCE_RE.sub(
+        lambda match: html.unescape(match.group(0)),
+        value,
+    )
+
+
 def _commonmark_unescape(value: str) -> str:
-    """Unescape only backslash-escapable ASCII punctuation."""
+    """Unescape punctuation and strict CommonMark character references."""
     out: list[str] = []
     index = 0
     while index < len(value):
@@ -76,13 +88,12 @@ def _commonmark_unescape(value: str) -> str:
             continue
         out.append(char)
         index += 1
-    return "".join(out)
+    return _decode_character_references("".join(out))
 
 
 def _normalized_reference_label(label: str) -> str:
     """Apply CommonMark reference-label normalization."""
-    rendered = html.unescape(_commonmark_unescape(label))
-    return " ".join(rendered.split()).casefold()
+    return " ".join(_commonmark_unescape(label).split()).casefold()
 
 
 def _leading_columns(value: str) -> int:
@@ -96,6 +107,116 @@ def _leading_columns(value: str) -> int:
         else:
             break
     return columns
+
+
+def _strip_indent_columns(value: str, columns: int) -> str:
+    current = 0
+    index = 0
+    while index < len(value) and current < columns:
+        char = value[index]
+        if char == " ":
+            current += 1
+        elif char == "\t":
+            current += 4 - (current % 4)
+        else:
+            break
+        index += 1
+    return value[index:] if current >= columns else value
+
+
+def _list_item_content(raw: str) -> tuple[int, str] | None:
+    match = normalizer.LIST_ITEM_RE.match(raw)
+    if match is None:
+        return None
+    layout = normalizer._list_item_layout(raw)
+    if layout is None:
+        return None
+    _marker_indent, content_indent = layout
+    marker_indent = len(match.group("indent"))
+    marker_width = len(match.group("marker"))
+    column = marker_indent + marker_width
+    spacing_columns = 0
+    for char in match.group("spacing"):
+        width = 4 - (column % 4) if char == "\t" else 1
+        column += width
+        spacing_columns += width
+    effective_spacing = spacing_columns if 0 < spacing_columns <= 4 else 1
+    excess_padding = max(0, spacing_columns - effective_spacing)
+    return content_indent, (" " * excess_padding) + raw[match.end() :]
+
+
+def _inline_html_construct_end(text: str, index: int) -> int | None:
+    if index >= len(text) or text[index] != "<" or _is_backslash_escaped(text, index):
+        return None
+    if text.startswith("<!--", index):
+        end = text.find("-->", index + 4)
+        if end < 0:
+            return None
+        body = text[index + 4 : end]
+        if body.startswith(">") or body.startswith("->") or "--" in body or body.endswith("-"):
+            return None
+        return end + 3
+    if text.startswith("<?", index):
+        end = text.find("?>", index + 2)
+        return None if end < 0 else end + 2
+    if text.startswith("<![CDATA[", index):
+        end = text.find("]]>", index + 9)
+        return None if end < 0 else end + 3
+    if re.match(r"<![A-Z]", text[index:]):
+        end = text.find(">", index + 2)
+        return None if end < 0 else end + 1
+    match = normalizer.INLINE_HTML_TAG_RE.match(text, index)
+    return match.end() if match is not None else None
+
+
+def _strip_inline_html_constructs(text: str) -> str:
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        end = _inline_html_construct_end(text, index)
+        if end is not None:
+            index = end
+            continue
+        out.append(text[index])
+        index += 1
+    return "".join(out)
+
+
+def _render_reference_record_label(label: str) -> str:
+    value = _strip_inline_html_constructs(label).strip()
+    if value.startswith(chr(96)):
+        run_len = normalizer._backtick_run_length(value, 0)
+        if (
+            run_len > 0
+            and len(value) >= 2 * run_len
+            and value.endswith(chr(96) * run_len)
+            and chr(96) not in value[run_len : len(value) - run_len]
+        ):
+            code_text = value[run_len : len(value) - run_len].replace("\n", " ")
+            if (
+                len(code_text) >= 2
+                and code_text.startswith(" ")
+                and code_text.endswith(" ")
+                and code_text.strip()
+            ):
+                code_text = code_text[1:-1]
+            return code_text
+    result = value
+    changed = True
+    while changed:
+        changed = False
+        for marker in normalizer.INLINE_WRAPPERS:
+            if marker == chr(96):
+                continue
+            if (
+                len(result) > 2 * len(marker)
+                and result.startswith(marker)
+                and result.endswith(marker)
+            ):
+                result = result[len(marker) : -len(marker)].strip()
+                changed = True
+                break
+    return _commonmark_unescape(result).strip()
 
 
 def _is_backslash_escaped(text: str, index: int) -> bool:
@@ -152,8 +273,13 @@ def _reference_definition_source_lines(text: str) -> list[str]:
     lines: list[str] = []
     fence_char: str | None = None
     fence_len = 0
+    fence_list_indent = 0
+    fence_requires_quote = False
+    active_list_indent: int | None = None
     html_mode: str | None = None
     html_end: str | None = None
+    html_list_indent = 0
+    html_requires_quote = False
 
     def boundary() -> None:
         if not lines or lines[-1] != "":
@@ -184,65 +310,130 @@ def _reference_definition_source_lines(text: str) -> list[str]:
             and block_tag.group("tag").lower() in normalizer.HTML_BLOCK_TAGS
         ):
             return "blank", None
-        if normalizer.STANDALONE_HTML_TAG_RE.fullmatch(raw):
-            return "blank", None
         return None
 
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     for raw in normalized.split("\n"):
+        unquoted, quoted = normalizer._strip_blockquote_prefix(raw)
+
         if fence_char is not None:
-            close = re.fullmatch(
-                rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*", raw
-            )
-            if close is not None:
+            if fence_requires_quote and not quoted:
                 fence_char = None
                 fence_len = 0
-            continue
-
-        if html_mode is not None:
-            if html_mode == "tag":
-                if html_end is not None and re.search(
-                    rf"</{re.escape(html_end)}>", raw, re.IGNORECASE
-                ):
-                    html_mode = None
-                    html_end = None
-                continue
-            if html_mode == "token":
-                if html_end is not None and html_end in raw:
-                    html_mode = None
-                    html_end = None
-                continue
-            if html_mode == "blank":
-                if not raw.strip():
-                    html_mode = None
-                    html_end = None
-                    boundary()
-                continue
-
-        if not (raw.startswith("\t") or raw.startswith("    ")):
-            opener = REFERENCE_FENCE_OPEN_RE.match(raw)
-            if opener is not None:
-                run = opener.group(1)
-                info = opener.group(2)
-                if run[0] != chr(96) or chr(96) not in info:
-                    boundary()
-                    fence_char = run[0]
-                    fence_len = len(run)
+                fence_list_indent = 0
+                fence_requires_quote = False
+                boundary()
+            else:
+                fence_view = unquoted if quoted else raw
+                if fence_list_indent > 0:
+                    if fence_view.strip() and _leading_columns(fence_view) < fence_list_indent:
+                        fence_char = None
+                        fence_len = 0
+                        fence_list_indent = 0
+                        fence_requires_quote = False
+                        boundary()
+                    else:
+                        fence_view = _strip_indent_columns(fence_view, fence_list_indent)
+                if fence_char is not None:
+                    close = re.fullmatch(
+                        rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*",
+                        fence_view,
+                    )
+                    if close is not None:
+                        fence_char = None
+                        fence_len = 0
+                        fence_list_indent = 0
+                        fence_requires_quote = False
                     continue
 
-            started = html_start(raw)
-            if started is not None:
+        view = unquoted if quoted else raw
+        current_list_indent: int | None = None
+        list_open = _list_item_content(view)
+        if list_open is not None:
+            current_list_indent, view = list_open
+            active_list_indent = current_list_indent
+        elif active_list_indent is not None:
+            if view.strip() and _leading_columns(view) >= active_list_indent:
+                view = _strip_indent_columns(view, active_list_indent)
+                current_list_indent = active_list_indent
+            elif view.strip():
+                active_list_indent = None
+
+        if html_mode is not None:
+            if html_requires_quote and not quoted:
+                html_mode = None
+                html_end = None
+                html_list_indent = 0
+                html_requires_quote = False
                 boundary()
-                html_mode, html_end = started
-                if html_mode == "tag" and html_end is not None and re.search(
-                    rf"</{re.escape(html_end)}>", raw, re.IGNORECASE
-                ):
-                    html_mode = None
-                    html_end = None
-                elif html_mode == "token" and html_end is not None and html_end in raw:
-                    html_mode = None
-                    html_end = None
+            else:
+                html_view = view
+                if html_list_indent > 0:
+                    if html_view.strip() and _leading_columns(html_view) < html_list_indent:
+                        html_mode = None
+                        html_end = None
+                        html_list_indent = 0
+                        html_requires_quote = False
+                        boundary()
+                    else:
+                        html_view = _strip_indent_columns(html_view, html_list_indent)
+                if html_mode is not None:
+                    if html_mode == "tag":
+                        if html_end is not None and re.search(
+                            rf"</{re.escape(html_end)}>", html_view, re.IGNORECASE
+                        ):
+                            html_mode = None
+                            html_end = None
+                            html_list_indent = 0
+                            html_requires_quote = False
+                        continue
+                    if html_mode == "token":
+                        if html_end is not None and html_end in html_view:
+                            html_mode = None
+                            html_end = None
+                            html_list_indent = 0
+                            html_requires_quote = False
+                        continue
+                    if html_mode == "blank":
+                        if not html_view.strip():
+                            html_mode = None
+                            html_end = None
+                            html_list_indent = 0
+                            html_requires_quote = False
+                            boundary()
+                        continue
+
+        opener = REFERENCE_FENCE_OPEN_RE.match(view)
+        if opener is not None:
+            run = opener.group(1)
+            info = opener.group(2)
+            if run[0] != chr(96) or chr(96) not in info:
+                boundary()
+                fence_char = run[0]
+                fence_len = len(run)
+                fence_list_indent = current_list_indent or 0
+                fence_requires_quote = quoted
                 continue
+
+        started = html_start(view)
+        if started is not None:
+            boundary()
+            html_mode, html_end = started
+            html_list_indent = current_list_indent or 0
+            html_requires_quote = quoted
+            if html_mode == "tag" and html_end is not None and re.search(
+                rf"</{re.escape(html_end)}>", view, re.IGNORECASE
+            ):
+                html_mode = None
+                html_end = None
+                html_list_indent = 0
+                html_requires_quote = False
+            elif html_mode == "token" and html_end is not None and html_end in view:
+                html_mode = None
+                html_end = None
+                html_list_indent = 0
+                html_requires_quote = False
+            continue
 
         lines.append(raw)
 
@@ -270,6 +461,34 @@ def _parse_reference_title(value: str) -> bool:
         elif char == closer:
             return False
     return True
+
+
+def _consume_reference_title(
+    lines: list[str], next_index: int, initial: str
+) -> tuple[int, str] | None:
+    title = initial.strip()
+    consumed = 0
+    if not title:
+        if (
+            next_index >= len(lines)
+            or re.match(r"^ {1,3}[\"'(]", lines[next_index]) is None
+        ):
+            return 0, ""
+        title = lines[next_index].lstrip(" ")
+        consumed += 1
+    if title[0] not in ('"', "'", "("):
+        return None
+    while not _parse_reference_title(title):
+        current = next_index + consumed
+        if (
+            current >= len(lines)
+            or not lines[current].strip()
+            or re.match(r"^ {1,3}\S", lines[current]) is None
+        ):
+            return None
+        title += "\n" + lines[current].lstrip(" ")
+        consumed += 1
+    return consumed, title
 
 
 def _parse_reference_destination_and_tail(value: str) -> tuple[str, str] | None:
@@ -370,21 +589,16 @@ def _reference_entries(text: str) -> list[tuple[str, str]]:
             continue
 
         destination, tail = parsed
-        tail = tail.strip()
-        if tail:
-            if not _parse_reference_title(tail):
-                index += consumed
-                continue
-        elif index + consumed < len(lines):
-            possible_title = lines[index + consumed]
-            if re.match(r"^ {1,3}\S", possible_title) and _parse_reference_title(
-                possible_title.strip()
-            ):
-                consumed += 1
-
-        entries.append(
-            (label, html.unescape(_commonmark_unescape(destination)))
+        collected_title = _consume_reference_title(
+            lines, index + consumed, tail
         )
+        if collected_title is None:
+            index += consumed
+            continue
+        title_consumed, _title = collected_title
+        consumed += title_consumed
+
+        entries.append((label, _commonmark_unescape(destination)))
         paragraph_open = False
         index += consumed
 
@@ -633,7 +847,7 @@ def canonicalize_reference_record_links(text: str) -> str:
         if _is_backslash_escaped(match.string, match.start()):
             return match.group(0)
         label = match.group("label")
-        rendered_label = normalizer._render_placeholder_candidate(label)
+        rendered_label = _render_reference_record_label(label)
         if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is None:
             return match.group(0)
         destination = destination_for(label, match.group("reference"))
@@ -651,7 +865,7 @@ def canonicalize_reference_record_links(text: str) -> str:
         if _is_backslash_escaped(match.string, match.start()):
             return match.group(0)
         label = match.group("label")
-        rendered_label = normalizer._render_placeholder_candidate(label)
+        rendered_label = _render_reference_record_label(label)
         if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is None:
             return match.group(0)
         destination = destinations.get(_normalized_reference_label(label))
