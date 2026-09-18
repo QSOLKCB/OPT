@@ -432,7 +432,7 @@ def visible_nonfenced_lines(
         )
         rendered = strip_inline_html_constructs(rendered)
         if rendered.strip():
-            if raw_html_text is not None or raw_html_events is not None:
+            if raw_html_text is not None:
                 raw_html_text.append(rendered)
             if raw_html_events is not None:
                 raw_html_events.append((source_index, rendered))
@@ -1169,18 +1169,26 @@ def visible_html_record_links(text: str) -> list[tuple[str, str]]:
             value for value in href_match.groups() if value is not None
         )
 
-        close = re.search(r"</a[ \t\r\n]*>", text[tag.end() :], re.IGNORECASE)
+        tail = text[tag.end() :]
+        close = re.search(r"</a[ \t\r\n]*>", tail, re.IGNORECASE)
         if close is None:
             index = tag.end()
             continue
 
+        nested = re.search(r"<a(?:[ \t\r\n]|>)", tail, re.IGNORECASE)
         label_start = tag.end()
-        label_end = tag.end() + close.start()
+        if nested is not None and nested.start() < close.start():
+            label_end = tag.end() + nested.start()
+            next_index = tag.end() + nested.start()
+        else:
+            label_end = tag.end() + close.start()
+            next_index = tag.end() + close.end()
+
         rendered_label = rendered_inline_text(text[label_start:label_end])
         if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label):
             links.append((rendered_label, html.unescape(href)))
 
-        index = tag.end() + close.end()
+        index = next_index
 
     return links
 
@@ -1921,12 +1929,19 @@ for path in sorted(OPT_DIR.glob("*.md")):
         die(f"{path.relative_to(ROOT)} missing visible sections: {', '.join(missing)}")
 
     for heading in sorted(REQUIRED_V2):
-        if not section_has_content(section_lines(text, heading)):
+        if not section_has_content(
+            section_lines(text, heading, include_raw_html_text=True)
+        ):
             die(
                 f"{path.relative_to(ROOT)} has empty/template/structural/markup-only mandatory section {heading}"
             )
 
-    source_evidence = section_lines(text, "## Source evidence")
+    source_evidence = section_lines(
+        text,
+        "## Source evidence",
+        include_raw_html_text=True,
+        include_raw_html_source=True,
+    )
     if not source_section_has_identity(source_evidence):
         die(
             f"{path.relative_to(ROOT)} ## Source evidence lacks a concrete source identity "
@@ -1969,7 +1984,7 @@ def github_heading_slug(value: str) -> str:
 def record_fragment_ids(path: Path) -> set[str]:
     text = path.read_text(encoding="utf-8")
     anchors: set[str] = set()
-    slug_counts: Counter[str] = Counter()
+    allocated_slugs: set[str] = set()
     raw_html_source: list[str] = []
 
     visible_lines = visible_nonfenced_lines(
@@ -1977,21 +1992,42 @@ def record_fragment_ids(path: Path) -> set[str]:
         raw_html_source=raw_html_source,
     )
 
-    for line in visible_lines:
-        heading = normalized_visible_heading(line)
-        if heading is None:
-            continue
-        match = re.match(r"^#{1,6}(?:[ \t]+|$)(?P<body>.*)$", heading)
-        if match is None:
-            continue
-        slug = github_heading_slug(match.group("body"))
-        if not slug:
-            continue
-        count = slug_counts[slug]
-        slug_counts[slug] += 1
-        anchors.add(slug if count == 0 else f"{slug}-{count}")
+    def allocate_heading_slug(body: str) -> None:
+        base = github_heading_slug(body)
+        if not base:
+            return
+        candidate = base
+        suffix = 1
+        while candidate in allocated_slugs:
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        allocated_slugs.add(candidate)
+        anchors.add(candidate)
 
-    visible_html_source = "\n".join((*visible_lines, *raw_html_source))
+    for index, line in enumerate(visible_lines):
+        heading = normalized_visible_heading(line)
+        if heading is not None:
+            match = re.match(r"^#{1,6}(?:[ \t]+|$)(?P<body>.*)$", heading)
+            if match is not None:
+                allocate_heading_slug(match.group("body"))
+            continue
+
+        if SETEXT_H1_RE.fullmatch(line) or SETEXT_H2_RE.fullmatch(line):
+            start = setext_heading_start(visible_lines, index, 0)
+            if start is not None:
+                body = " ".join(
+                    part.strip()
+                    for part in visible_lines[start:index]
+                    if part.strip()
+                )
+                allocate_heading_slug(body)
+
+    visible_html_parts: list[str] = []
+    comment_open = False
+    for part in (*visible_lines, *raw_html_source):
+        cleaned, comment_open = strip_inline_html_comments(part, comment_open)
+        visible_html_parts.append(cleaned)
+    visible_html_source = "\n".join(visible_html_parts)
     visible_html_source, _protected_code = protect_code_spans(visible_html_source)
 
     for tag in INLINE_HTML_TAG_RE.finditer(visible_html_source):
@@ -2189,8 +2225,19 @@ canonical_text = "\n".join(rendered_inline_text(line) for line in canonical)
 if "P = (X, F, f, d, C, B, S)" not in canonical_text:
     die("OPTIMIZATION-PROBLEM.md is missing visible canonical P = (X, F, f, d, C, B, S) formula")
 for field, pattern in CANONICAL_DEFINITION_PATTERNS.items():
-    if not any(pattern.match(line) for line in canonical):
-        die(f"OPTIMIZATION-PROBLEM.md is missing visible canonical definition for {field}")
+    matches = [
+        match
+        for line in canonical
+        if (match := pattern.fullmatch(line)) is not None
+    ]
+    if not any(
+        has_substantive_rendered_text(match.group("body"))
+        for match in matches
+    ):
+        die(
+            "OPTIMIZATION-PROBLEM.md is missing visible substantive canonical "
+            f"definition for {field}"
+        )
 
 classification_lines = section_lines(problem_text, "## Required classification")
 if not classification_lines:
