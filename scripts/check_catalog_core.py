@@ -1327,19 +1327,19 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
             i += 1
             continue
 
-        raw_label = text[i + 1 : label_close]
-        rendered_label = rendered_record_label(raw_label)
-        if not re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label):
-            i += 1
-            continue
-
         destination = inline_link_destination(text, label_close + 1)
+        link_end = find_inline_link_end(text, label_close + 1)
         if destination is None:
             i += 1
             continue
 
-        links.append((rendered_label, commonmark_unescape(destination)))
-        link_end = find_inline_link_end(text, label_close + 1)
+        decoded_destination = commonmark_unescape(destination)
+        rel, _separator, _fragment = decoded_destination.partition("#")
+        if rel.startswith("optimizations/"):
+            raw_label = text[i + 1 : label_close]
+            rendered_label = rendered_record_label(raw_label)
+            links.append((rendered_label, decoded_destination))
+
         i = link_end if link_end is not None else label_close + 1
 
     return links
@@ -1521,9 +1521,11 @@ def visible_html_record_links(text: str) -> list[tuple[str, str]]:
             continue
         label_end, next_index = extent
 
-        rendered_label = rendered_inline_text(text[tag.end():label_end])
-        if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label):
-            links.append((rendered_label, decode_html_attribute_references(href)))
+        decoded_href = decode_html_attribute_references(href)
+        rel, _separator, _fragment = decoded_href.partition("#")
+        if rel.startswith("optimizations/"):
+            rendered_label = rendered_inline_text(text[tag.end():label_end])
+            links.append((rendered_label, decoded_href))
 
         index = next_index
 
