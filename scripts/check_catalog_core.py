@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import html
+import ipaddress
 import re
 import string
 from collections import Counter
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 OPT_DIR = ROOT / "optimizations"
@@ -371,7 +373,9 @@ def _line_keeps_paragraph_open(raw: str, was_open: bool = False) -> bool:
 
 
 def visible_nonfenced_lines(
-    lines: list[str], raw_html_text: list[str] | None = None
+    lines: list[str],
+    raw_html_text: list[str] | None = None,
+    raw_html_source: list[str] | None = None,
 ) -> list[str]:
     """Return Markdown-visible lines used by schema validation.
 
@@ -451,6 +455,12 @@ def visible_nonfenced_lines(
                     else block_raw
                 )
                 if (
+                    raw_html_source is not None
+                    and html_mode == "tag"
+                    and html_end == "pre"
+                ):
+                    raw_html_source.append(html_view)
+                if (
                     raw_html_text is not None
                     and html_mode == "tag"
                     and html_end in {"pre", "textarea"}
@@ -474,6 +484,8 @@ def visible_nonfenced_lines(
                         html_list_indent = 0
                     continue
                 if html_mode == "blank":
+                    if raw_html_source is not None and html_view.strip():
+                        raw_html_source.append(html_view)
                     if raw_html_text is not None:
                         rendered_html = strip_inline_html_constructs(html_view)
                         if rendered_html.strip():
@@ -535,6 +547,11 @@ def visible_nonfenced_lines(
                     html_mode, html_end = html_start
                     html_quote_depth = quote_depth
                     html_list_indent = current_list_indent or 0
+                    if raw_html_source is not None and (
+                        html_mode == "blank"
+                        or (html_mode == "tag" and html_end == "pre")
+                    ):
+                        raw_html_source.append(block_view)
                     if raw_html_text is not None and (
                         html_mode == "blank"
                         or (html_mode == "tag" and html_end in {"pre", "textarea"})
@@ -1009,6 +1026,55 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
         links.append((rendered_label, commonmark_unescape(destination)))
         link_end = find_inline_link_end(text, label_close + 1)
         i = link_end if link_end is not None else label_close + 1
+
+    return links
+
+
+HTML_HREF_RE = re.compile(
+    r"""(?:^|[ \t\r\n])href[ \t\r\n]*=[ \t\r\n]*(?:"([^"]*)"|'([^']*)'|([^ \t\r\n"'=<>\x60]+))""",
+    re.IGNORECASE,
+)
+
+
+def visible_html_record_links(text: str) -> list[tuple[str, str]]:
+    """Return OPT-labelled visible raw-HTML anchors and decoded href targets."""
+    links: list[tuple[str, str]] = []
+    index = 0
+    while index < len(text):
+        start = text.find("<", index)
+        if start < 0:
+            break
+
+        tag = INLINE_HTML_TAG_RE.match(text, start)
+        if tag is None:
+            index = start + 1
+            continue
+
+        tag_source = tag.group(0)
+        if re.match(r"<a(?:[ \t\r\n]|>)", tag_source, re.IGNORECASE) is None:
+            index = tag.end()
+            continue
+
+        href_match = HTML_HREF_RE.search(tag_source)
+        if href_match is None:
+            index = tag.end()
+            continue
+        href = next(
+            value for value in href_match.groups() if value is not None
+        )
+
+        close = re.search(r"</a[ \t\r\n]*>", text[tag.end() :], re.IGNORECASE)
+        if close is None:
+            index = tag.end()
+            continue
+
+        label_start = tag.end()
+        label_end = tag.end() + close.start()
+        rendered_label = rendered_inline_text(text[label_start:label_end])
+        if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label):
+            links.append((rendered_label, html.unescape(href)))
+
+        index = tag.end() + close.end()
 
     return links
 
@@ -1526,8 +1592,40 @@ def inline_link_destinations(text: str) -> list[str]:
     return destinations
 
 
+def valid_http_source_url(value: str) -> bool:
+    """Require an absolute HTTP(S) URL with a syntactically valid host."""
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+    except ValueError:
+        return False
+
+    if parsed.scheme.lower() not in {"http", "https"} or not host:
+        return False
+
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+
+    if len(host) > 253:
+        return False
+    labels = host.rstrip(".").split(".")
+    return bool(labels) and all(
+        label
+        and len(label) <= 63
+        and label[0].isalnum()
+        and label[-1].isalnum()
+        and all(char.isalnum() or char == "-" for char in label)
+        for label in labels
+    )
+
+
 def source_text_has_identity(line: str, sources_root: Path) -> bool:
-    if SOURCE_URL_RE.search(line) or SOURCE_DOI_RE.search(line):
+    if any(valid_http_source_url(match.group(0)) for match in SOURCE_URL_RE.finditer(line)):
+        return True
+    if SOURCE_DOI_RE.search(line):
         return True
     if any(
         source_commit_has_context(line, match)
@@ -1745,8 +1843,17 @@ record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in re
 
 for doc_name in ("README.md", "CATALOG.md"):
     text = (ROOT / doc_name).read_text(encoding="utf-8")
-    rendered = visible_text(text)
-    for label, destination in visible_record_links(rendered):
+    raw_html_source: list[str] = []
+    rendered = "\n".join(
+        visible_nonfenced_lines(
+            markdown_source_lines(text),
+            raw_html_source=raw_html_source,
+        )
+    )
+    record_links = visible_record_links(rendered)
+    record_links.extend(visible_html_record_links(rendered))
+    record_links.extend(visible_html_record_links("\n".join(raw_html_source)))
+    for label, destination in record_links:
         rel, _separator, _fragment = destination.partition("#")
         if not rel.startswith("optimizations/") or not rel.endswith(".md"):
             die(
@@ -1759,7 +1866,7 @@ for doc_name in ("README.md", "CATALOG.md"):
         target_id = record_paths.get(rel)
         if target_id is None:
             die(f"record link in {doc_name} is not a discovered OPT record: {rel}")
-        if unwrap_markdown_emphasis(label) != target_id:
+        if rendered_record_label(label) != target_id:
             die(
                 f"record link label mismatch in {doc_name}: '{label}' points to "
                 f"{target_id} ({rel})"
@@ -1892,7 +1999,7 @@ if not problem_visible or problem_visible[0] != "# Optimization Problem Contract
 if "## Canonical contract" not in problem_visible:
     die("OPTIMIZATION-PROBLEM.md is missing visible ## Canonical contract")
 canonical = section_lines(problem_text, "## Canonical contract")
-canonical_text = "\n".join(canonical)
+canonical_text = "\n".join(rendered_inline_text(line) for line in canonical)
 if "P = (X, F, f, d, C, B, S)" not in canonical_text:
     die("OPTIMIZATION-PROBLEM.md is missing visible canonical P = (X, F, f, d, C, B, S) formula")
 for field, pattern in CANONICAL_DEFINITION_PATTERNS.items():
