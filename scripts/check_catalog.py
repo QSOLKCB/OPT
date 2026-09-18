@@ -891,6 +891,26 @@ def _setext_heading_source(lines: list[str], underline_index: int) -> str | None
     )
 
 
+def _strip_section_container_prefixes(value: str) -> str:
+    """Strip active blockquote/list containers before rendered placeholder checks."""
+    result = value
+    while True:
+        changed = False
+
+        unquoted, depth = _strip_blockquote_prefix_with_depth(result)
+        if depth > 0:
+            result = unquoted
+            changed = True
+
+        list_item = _list_item_content(result)
+        if list_item is not None:
+            _content_indent, result = list_item
+            changed = True
+
+        if not changed:
+            return result.strip()
+
+
 def canonicalize_mandatory_section_placeholders(text: str) -> str:
     """Make generic rendered placeholders non-substantive in required record sections."""
     if re.search(r"(?m)^# OPT-[A-Z]+-\d{3} — ", text) is None:
@@ -938,7 +958,8 @@ def canonicalize_mandatory_section_placeholders(text: str) -> str:
             continue
 
         if active_required_section:
-            rendered = _render_reference_aware_candidate(content.strip(), definitions)
+            candidate = _strip_section_container_prefixes(content)
+            rendered = _render_reference_aware_candidate(candidate, definitions)
             rendered = _strip_inline_html_constructs(rendered).strip()
             if GENERIC_SECTION_PLACEHOLDER_RE.fullmatch(rendered):
                 out.append(ending)
