@@ -302,8 +302,10 @@ def mask_inline_code_record_destinations(text: str) -> str:
             continue
 
         code_text = text[index + run_len : close_start]
-        code_text = code_text.replace(
-            "(optimizations/", "(__inline_code__/optimizations/"
+        code_text = re.sub(
+            r"\([ \t\r\n]*optimizations/",
+            "(__inline_code__/optimizations/",
+            code_text,
         )
         out.append(
             text[index : index + run_len]
