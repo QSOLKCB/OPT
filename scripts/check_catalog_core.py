@@ -410,32 +410,60 @@ def _line_keeps_paragraph_open(raw: str, was_open: bool = False) -> bool:
 
 def strip_nonrendering_html_regions(
     text: str,
-    hidden_tag: str | None,
+    hidden_state: tuple[str, int] | None,
     *,
     honor_backslash_escapes: bool,
-) -> tuple[str, str | None]:
+) -> tuple[str, tuple[str, int] | None]:
     """Remove parsed HTML regions whose contents are not visibly rendered."""
     out: list[str] = []
     index = 0
 
     while index < len(text):
-        if hidden_tag is not None:
-            close_re = re.compile(
-                rf"</{re.escape(hidden_tag)}[ \t\r\n]*>",
-                re.IGNORECASE,
+        if hidden_state is not None:
+            hidden_tag, depth = hidden_state
+            tag_start = text.find("<", index)
+            if tag_start < 0:
+                return "".join(out), hidden_state
+
+            tag_match = INLINE_HTML_TAG_RE.match(text, tag_start)
+            if tag_match is None:
+                index = tag_start + 1
+                continue
+
+            source = tag_match.group(0)
+            escaped = (
+                honor_backslash_escapes
+                and is_backslash_escaped(text, tag_start)
             )
-            close = None
-            for candidate in close_re.finditer(text, index):
+            if escaped:
+                index = tag_match.end()
+                continue
+
+            if re.fullmatch(
+                rf"</{re.escape(hidden_tag)}[ \t\r\n]*>",
+                source,
+                re.IGNORECASE,
+            ):
+                depth -= 1
+                index = tag_match.end()
+                hidden_state = None if depth == 0 else (hidden_tag, depth)
+                continue
+
+            if re.match(
+                rf"<{re.escape(hidden_tag)}(?:[ \t\r\n/>]|$)",
+                source,
+                re.IGNORECASE,
+            ):
                 if (
-                    not honor_backslash_escapes
-                    or not is_backslash_escaped(text, candidate.start())
+                    not source.rstrip().endswith("/>")
+                    and hidden_tag not in HTML_VOID_TAGS
                 ):
-                    close = candidate
-                    break
-            if close is None:
-                return "".join(out), hidden_tag
-            index = close.end()
-            hidden_tag = None
+                    depth += 1
+                    hidden_state = (hidden_tag, depth)
+                index = tag_match.end()
+                continue
+
+            index = tag_match.end()
             continue
 
         tag_start = text.find("<", index)
@@ -480,10 +508,10 @@ def strip_nonrendering_html_regions(
             index = tag_match.end()
             continue
 
-        hidden_tag = tag
+        hidden_state = (tag, 1)
         index = tag_match.end()
 
-    return "".join(out), hidden_tag
+    return "".join(out), hidden_state
 
 
 def visible_nonfenced_lines(
@@ -513,8 +541,8 @@ def visible_nonfenced_lines(
     html_list_indent = 0
     raw_html_comment = False
     raw_html_source_comment = False
-    raw_html_hidden_tag: str | None = None
-    raw_html_source_hidden_tag: str | None = None
+    raw_html_hidden_tag: tuple[str, int] | None = None
+    raw_html_source_hidden_tag: tuple[str, int] | None = None
     paragraph_open = False
 
     def append_visible(source_index: int, value: str) -> None:
@@ -2510,8 +2538,31 @@ def collect_explicit_html_anchors(
     return anchors
 
 
-def github_heading_slug(value: str) -> str:
+def heading_slug_reference_source(
+    value: str, reference_definitions: set[str]
+) -> str:
+    """Collapse resolved full references; preserve unresolved visible reference text."""
+    pattern = re.compile(
+        r"\[(?P<label>[^\]]*)\]\[(?P<reference>[^\]]*)\]"
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        label = match.group("label")
+        reference = match.group("reference") or label
+        if normalized_reference_label(reference) in reference_definitions:
+            return label
+        return label + match.group("reference")
+
+    return pattern.sub(replace, value)
+
+
+def github_heading_slug(
+    value: str, reference_definitions: set[str] | None = None
+) -> str:
     """Approximate GitHub's rendered heading fragment for repository headings."""
+    value = heading_slug_reference_source(
+        value, reference_definitions or set()
+    )
     value = rendered_inline_text(value).strip().lower()
     value = "".join(
         char
@@ -2538,9 +2589,13 @@ def record_fragment_ids(path: Path) -> set[str]:
         markdown_source_lines(text),
         raw_html_source=raw_html_source,
     )
+    _hidden_reference_lines, heading_definitions = reference_definition_scan(
+        visible_lines
+    )
+    heading_definition_keys = set(heading_definitions)
 
     def allocate_heading_slug(body: str) -> None:
-        base = github_heading_slug(body)
+        base = github_heading_slug(body, heading_definition_keys)
         if not base:
             return
         candidate = base
@@ -2552,11 +2607,14 @@ def record_fragment_ids(path: Path) -> set[str]:
         anchors.add(candidate)
 
     for index, line in enumerate(visible_lines):
-        heading = normalized_visible_heading(line)
-        if heading is not None:
-            match = re.match(r"^#{1,6}(?:[ \t]+|$)(?P<body>.*)$", heading)
-            if match is not None:
-                allocate_heading_slug(match.group("body"))
+        match = re.match(
+            r"^#{1,6}(?:[ \t]+|$)(?P<body>.*)$", line
+        )
+        if match is not None:
+            body = re.sub(
+                r"[ \t]+#+[ \t]*$", "", match.group("body")
+            )
+            allocate_heading_slug(body)
             continue
 
         if SETEXT_H1_RE.fullmatch(line) or SETEXT_H2_RE.fullmatch(line):
@@ -2621,7 +2679,8 @@ for doc_name in ("README.md", "CATALOG.md"):
         )
     )
     record_links = visible_record_links(rendered)
-    record_links.extend(visible_html_record_links(rendered))
+    rendered_html_scan, _protected_html_code = protect_code_spans(rendered)
+    record_links.extend(visible_html_record_links(rendered_html_scan))
     record_links.extend(visible_html_record_links("\n".join(raw_html_source)))
     for label, destination in record_links:
         rel, separator, fragment = destination.partition("#")
