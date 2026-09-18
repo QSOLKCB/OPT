@@ -44,10 +44,10 @@ THEMATIC_BREAK_RE = re.compile(
 )
 SETEXT_H2_LINE_RE = re.compile(r"^(?P<indent> {0,3})-{3,}[ \t]*$")
 RECORD_LINK_START_RE = re.compile(
-    r"\[([^\]\r\n]+)\]\((optimizations/[^\s)#]+\.md)"
+    r"\[([^\]\r\n]+)\]\((optimizations/[^\s)#]+\.md(?:#[^\s)]*)?)"
 )
 ANGLE_RECORD_DEST_RE = re.compile(
-    r"(?P<prefix>\[[^\]\r\n]+\]\()<(?P<dest>optimizations/[^\s<>#]+\.md)>"
+    r"(?P<prefix>\[[^\]\r\n]+\]\()<(?P<dest>optimizations/[^\s<>#]+\.md(?:#[^\s<>]*)?)>"
 )
 BLOCKQUOTE_PREFIX_RE = re.compile(r"^ {0,3}>[ \t]?")
 LINK_REFERENCE_DEFINITION_RE = re.compile(
@@ -411,6 +411,14 @@ def canonicalize_top_level_atx_indentation(text: str) -> str:
             previous_blank = True
             continue
 
+        leading_spaces = len(content) - len(content.lstrip(" "))
+        if THEMATIC_BREAK_RE.fullmatch(content):
+            while list_content_indents and leading_spaces < list_content_indents[-1]:
+                list_content_indents.pop()
+            out.append(raw)
+            previous_blank = False
+            continue
+
         list_layout = _list_item_layout(content)
         if list_layout is not None:
             marker_indent, content_indent = list_layout
@@ -427,7 +435,6 @@ def canonicalize_top_level_atx_indentation(text: str) -> str:
             previous_blank = False
             continue
 
-        leading_spaces = len(content) - len(content.lstrip(" "))
         block_interrupt = bool(
             ATX_HEADING_RE.match(content)
             or FENCE_LINE_RE.match(content)

@@ -14,6 +14,7 @@ REFERENCE_DEFINITION_DEST_RE = re.compile(
     r"^ {0,3}\[(?P<label>(?:\\.|[^\[\]\\])+)]\:[ \t]+"
     r"(?P<destination><[^>\r\n]+>|[^ \t\r\n]+)"
 )
+REFERENCE_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FULL_REFERENCE_LINK_RE = re.compile(
     r"^\[(?P<label>[^\]]*)\]\[(?P<reference>[^\]]*)\]$"
 )
@@ -63,19 +64,53 @@ def _normalized_reference_label(label: str) -> str:
     return " ".join(unescaped.split()).casefold()
 
 
+def _reference_definition_source_lines(text: str) -> list[str]:
+    """Return lines where a CommonMark reference definition can actually parse."""
+    lines: list[str] = []
+    fence_char: str | None = None
+    fence_len = 0
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    for raw in normalized.split("\n"):
+        if fence_char is not None:
+            close = re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*", raw
+            )
+            if close is not None:
+                fence_char = None
+                fence_len = 0
+            continue
+
+        if raw.startswith("\t") or raw.startswith("    "):
+            continue
+
+        opener = REFERENCE_FENCE_OPEN_RE.match(raw)
+        if opener is not None:
+            run = opener.group(1)
+            info = opener.group(2)
+            if run[0] != "`" or "`" not in info:
+                fence_char = run[0]
+                fence_len = len(run)
+                continue
+
+        lines.append(raw)
+
+    return lines
+
+
 def _reference_definitions(text: str) -> set[str]:
-    return {
-        _normalized_reference_label(match.group("label"))
-        for match in REFERENCE_DEFINITION_RE.finditer(text)
-    }
+    definitions: set[str] = set()
+    for raw in _reference_definition_source_lines(text):
+        match = REFERENCE_DEFINITION_RE.match(raw)
+        if match is not None:
+            definitions.add(_normalized_reference_label(match.group("label")))
+    return definitions
 
 
 def _reference_destinations(text: str) -> dict[str, str]:
-    """Collect simple reference destinations used by OPT record links."""
+    """Collect rendered reference destinations used by OPT record links."""
     destinations: dict[str, str] = {}
-    for raw in text.splitlines():
-        if raw.startswith("\t") or raw.startswith("    "):
-            continue
+    for raw in _reference_definition_source_lines(text):
         match = REFERENCE_DEFINITION_DEST_RE.match(raw)
         if match is None:
             continue
@@ -86,6 +121,14 @@ def _reference_destinations(text: str) -> dict[str, str]:
         normalized_label = _normalized_reference_label(match.group("label"))
         destinations.setdefault(normalized_label, destination)
     return destinations
+
+
+def _record_destination_path(destination: str) -> str | None:
+    """Return a record path while allowing an optional URL fragment."""
+    path, _separator, _fragment = destination.partition("#")
+    if path.startswith("optimizations/") and path.endswith(".md"):
+        return path
+    return None
 
 
 def _render_reference_aware_candidate(value: str, definitions: set[str]) -> str:
@@ -272,7 +315,7 @@ def canonicalize_reference_record_links(text: str) -> str:
         destination = destination_for(label, match.group("reference"))
         if destination is None:
             return match.group(0)
-        if not (destination.startswith("optimizations/") and destination.endswith(".md")):
+        if _record_destination_path(destination) is None:
             destination = INVALID_REFERENCE_DESTINATION
         return f"[{label}]({destination})"
 
@@ -283,7 +326,7 @@ def canonicalize_reference_record_links(text: str) -> str:
         destination = destinations.get(_normalized_reference_label(label))
         if destination is None:
             return match.group(0)
-        if not (destination.startswith("optimizations/") and destination.endswith(".md")):
+        if _record_destination_path(destination) is None:
             destination = INVALID_REFERENCE_DESTINATION
         return f"[{label}]({destination})"
 

@@ -75,9 +75,11 @@ TEMPLATE_PLACEHOLDER_LINES = {
     "Define the measured or semantic condition that disables/reverts the optimization.",
 }
 
-LINK_RE = re.compile(r"\[([^\]]+)\]\((optimizations/[^)#]+\.md)\)")
+LINK_RE = re.compile(
+    r"\[([^\]]+)\]\((optimizations/[^)#]+\.md)(?:#[^)\s]*)?\)"
+)
 RECORD_LINK_CELL_RE = re.compile(
-    r"^\[(OPT-[A-Z]+-\d{3})\]\((optimizations/[^)#]+\.md)\)$"
+    r"^\[(OPT-[A-Z]+-\d{3})\]\((optimizations/[^)#]+\.md)(?:#[^)\s]*)?\)$"
 )
 ID_RE = re.compile(r"^# (OPT-[A-Z]+-\d{3}) — ")
 FILENAME_ID_RE = re.compile(r"^(OPT-[A-Z]+-\d{3})-")
@@ -211,6 +213,22 @@ def raw_html_tag_closes(raw: str, tag: str) -> bool:
     return re.search(rf"</{re.escape(tag)}>", raw, re.IGNORECASE) is not None
 
 
+def _line_keeps_paragraph_open(raw: str) -> bool:
+    """Approximate block starts that terminate an open CommonMark paragraph."""
+    stripped = raw.strip()
+    if not stripped:
+        return False
+    if re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", raw):
+        return False
+    if THEMATIC_BREAK_RE.fullmatch(stripped):
+        return False
+    if LINK_REFERENCE_DEFINITION_RE.fullmatch(stripped):
+        return False
+    if LIST_MARKER_ONLY_RE.fullmatch(stripped) or stripped == ">":
+        return False
+    return True
+
+
 def visible_nonfenced_lines(lines: list[str]) -> list[str]:
     """Return Markdown-visible lines used by schema validation."""
     visible: list[str] = []
@@ -219,9 +237,11 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
     inline_comment = False
     html_mode: str | None = None
     html_end: str | None = None
+    paragraph_open = False
 
     for raw in lines:
         if fence_char is not None:
+            paragraph_open = False
             close = re.fullmatch(
                 rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*", raw
             )
@@ -231,6 +251,7 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
             continue
 
         if html_mode is not None:
+            paragraph_open = False
             if html_mode == "tag":
                 if html_end is not None and raw_html_tag_closes(raw, html_end):
                     html_mode = None
@@ -248,6 +269,8 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                     visible.append("")
                 continue
 
+        was_paragraph_open = paragraph_open
+
         if inline_comment:
             rendered, inline_comment = strip_inline_html_comments(raw, True)
             if inline_comment:
@@ -255,36 +278,46 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
             raw_for_parse = rendered
         else:
             if is_indented_code_line(raw):
-                continue
+                if not paragraph_open:
+                    continue
+                raw_for_parse = raw
+            else:
+                opener = FENCE_OPEN_RE.match(raw)
+                if opener is not None:
+                    run = opener.group(1)
+                    info = opener.group(2)
+                    if run[0] != "`" or "`" not in info:
+                        paragraph_open = False
+                        fence_char = run[0]
+                        fence_len = len(run)
+                        continue
 
-            opener = FENCE_OPEN_RE.match(raw)
-            if opener is not None:
-                run = opener.group(1)
-                info = opener.group(2)
-                if run[0] != "`" or "`" not in info:
-                    fence_char = run[0]
-                    fence_len = len(run)
+                html_start = raw_html_block_start(raw)
+                if html_start is not None:
+                    paragraph_open = False
+                    html_mode, html_end = html_start
+                    if html_mode == "tag" and html_end is not None and raw_html_tag_closes(raw, html_end):
+                        html_mode = None
+                        html_end = None
+                    elif html_mode == "token" and html_end is not None and html_end in raw:
+                        html_mode = None
+                        html_end = None
                     continue
 
-            html_start = raw_html_block_start(raw)
-            if html_start is not None:
-                html_mode, html_end = html_start
-                if html_mode == "tag" and html_end is not None and raw_html_tag_closes(raw, html_end):
-                    html_mode = None
-                    html_end = None
-                elif html_mode == "token" and html_end is not None and html_end in raw:
-                    html_mode = None
-                    html_end = None
-                continue
+                raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
 
-            raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
-
-        if raw_for_parse and is_indented_code_line(raw_for_parse):
+        if raw_for_parse and is_indented_code_line(raw_for_parse) and not was_paragraph_open:
             continue
+
         if raw_for_parse:
             visible.append(raw_for_parse)
+            if is_indented_code_line(raw_for_parse) and was_paragraph_open:
+                paragraph_open = True
+            else:
+                paragraph_open = _line_keeps_paragraph_open(raw_for_parse)
         elif not inline_comment and raw == "":
             visible.append("")
+            paragraph_open = False
 
     return visible
 
@@ -583,6 +616,12 @@ def extract_markdown_table(
     expected = list(expected_headers)
     for i, line in enumerate(visible):
         if markdown_table_cells(line) != expected:
+            continue
+        if (
+            i > 0
+            and visible[i - 1].strip()
+            and not is_structural_only_line(visible[i - 1].strip())
+        ):
             continue
         if i + 1 >= len(visible):
             die(f"{context} table has no separator row")
