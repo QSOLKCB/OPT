@@ -62,6 +62,18 @@ INLINE_HTML_TAG_RE = re.compile(
     r"(?:[ \t]*=[ \t]*(?:\"[^\"]*\"|'[^']*'|[^ \t\n\"'=<>`]+))?)*"
     r"[ \t]*/?>"
 )
+HTML_HIDDEN_ATTR_RE = re.compile(
+    r"(?:^|[ \\t\\r\\n])hidden"
+    r"(?:[ \\t\\r\\n]*=[ \\t\\r\\n]*(?:\\\"[^\\\"]*\\\"|\'[^\']*\'|[^ \\t\\r\\n\\\"\'=<>`]+))?"
+    r"(?=[ \\t\\r\\n/>]|$)",
+    re.IGNORECASE,
+)
+NONRENDERING_INLINE_HTML_TAGS = {"script", "style", "template", "head", "title"}
+HTML_VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+}
+
 STANDALONE_HTML_TAG_RE = re.compile(
     r"^ {0,3}(?:"
     r"</(?P<close>[A-Za-z][A-Za-z0-9-]*)[ \t]*>"
@@ -1056,6 +1068,92 @@ def _unwrap_valid_code_span(value: str) -> str:
     return code_text
 
 
+def _strip_nonrendering_inline_html_regions(text: str) -> str:
+    """Remove inline HTML regions whose descendants are not rendered."""
+    out: list[str] = []
+    index = 0
+    hidden_state: tuple[str, int] | None = None
+
+    while index < len(text):
+        if hidden_state is not None:
+            hidden_tag, depth = hidden_state
+            tag_start = text.find("<", index)
+            if tag_start < 0:
+                return "".join(out)
+
+            tag = INLINE_HTML_TAG_RE.match(text, tag_start)
+            if tag is None:
+                index = tag_start + 1
+                continue
+
+            source = tag.group(0)
+            if re.fullmatch(
+                rf"</{re.escape(hidden_tag)}[ \\t\\r\\n]*>",
+                source,
+                re.IGNORECASE,
+            ):
+                depth -= 1
+                hidden_state = None if depth == 0 else (hidden_tag, depth)
+                index = tag.end()
+                continue
+
+            if re.match(
+                rf"<{re.escape(hidden_tag)}(?:[ \\t\\r\\n/>]|$)",
+                source,
+                re.IGNORECASE,
+            ):
+                if hidden_tag not in HTML_VOID_TAGS:
+                    depth += 1
+                    hidden_state = (hidden_tag, depth)
+                index = tag.end()
+                continue
+
+            index = tag.end()
+            continue
+
+        tag_start = text.find("<", index)
+        if tag_start < 0:
+            out.append(text[index:])
+            break
+
+        tag = INLINE_HTML_TAG_RE.match(text, tag_start)
+        if tag is None:
+            out.append(text[index : tag_start + 1])
+            index = tag_start + 1
+            continue
+
+        source = tag.group(0)
+        if source.startswith("</"):
+            out.append(text[index : tag.end()])
+            index = tag.end()
+            continue
+
+        name = re.match(r"<(?P<tag>[A-Za-z][A-Za-z0-9-]*)", source)
+        if name is None:
+            out.append(text[index : tag.end()])
+            index = tag.end()
+            continue
+
+        tag_name = name.group("tag").lower()
+        hidden = (
+            tag_name in NONRENDERING_INLINE_HTML_TAGS
+            or HTML_HIDDEN_ATTR_RE.search(source) is not None
+        )
+        if not hidden:
+            out.append(text[index : tag.end()])
+            index = tag.end()
+            continue
+
+        out.append(text[index:tag_start])
+        if tag_name in HTML_VOID_TAGS:
+            index = tag.end()
+            continue
+
+        hidden_state = (tag_name, 1)
+        index = tag.end()
+
+    return "".join(out)
+
 def _render_placeholder_candidate(value: str) -> str:
     """Render the subset of inline Markdown relevant to template placeholders."""
     result = html.unescape(value.strip())
@@ -1087,6 +1185,7 @@ def _render_placeholder_candidate(value: str) -> str:
                     result = result[1:label_close].strip()
                     changed = True
 
+    result = _strip_nonrendering_inline_html_regions(result)
     result = INLINE_HTML_TAG_RE.sub("", result)
     result = re.sub(r"\\(.)", r"\1", result)
     return html.unescape(result).strip()
