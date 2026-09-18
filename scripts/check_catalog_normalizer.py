@@ -62,6 +62,10 @@ INLINE_HTML_TAG_RE = re.compile(
     r"(?:[ \t]*=[ \t]*(?:\"[^\"]*\"|'[^']*'|[^ \t\n\"'=<>`]+))?)*"
     r"[ \t]*/?>"
 )
+HTML_ALT_ATTR_RE = re.compile(
+    r"""(?:^|[ \t\r\n])alt[ \t\r\n]*=[ \t\r\n]*(?:"([^"]*)"|'([^']*)'|([^ \t\r\n"'=<>\x60]+))""",
+    re.IGNORECASE,
+)
 HTML_HIDDEN_ATTR_RE = re.compile(
     r"(?:^|[ \t\r\n])hidden"
     r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\"[^\"]*\"|\'[^\']*\'|[^ \t\r\n\"\'=<>`]+))?"
@@ -1154,6 +1158,21 @@ def _strip_nonrendering_inline_html_regions(text: str) -> str:
 
     return "".join(out)
 
+def _preserve_html_image_alt_text(text: str) -> str:
+    """Replace visible HTML image tags with decoded accessible alt text."""
+    def replace(match: re.Match[str]) -> str:
+        source = match.group(0)
+        if re.match(r"<img(?:[ \t\r\n]|/?>)", source, re.IGNORECASE) is None:
+            return source
+        alt_match = HTML_ALT_ATTR_RE.search(source)
+        if alt_match is None:
+            return ""
+        alt = next(value for value in alt_match.groups() if value is not None)
+        return html.escape(html.unescape(alt), quote=False)
+
+    return INLINE_HTML_TAG_RE.sub(replace, text)
+
+
 def _render_placeholder_candidate(value: str) -> str:
     """Render the subset of inline Markdown relevant to template placeholders."""
     result = html.unescape(value.strip())
@@ -1199,6 +1218,7 @@ def _render_placeholder_candidate(value: str) -> str:
                     changed = True
 
     result = _strip_nonrendering_inline_html_regions(result)
+    result = _preserve_html_image_alt_text(result)
     result = INLINE_HTML_TAG_RE.sub("", result)
     result = re.sub(r"\\(.)", r"\1", result)
     return html.unescape(result).strip()
