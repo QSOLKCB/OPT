@@ -2121,6 +2121,8 @@ def record_fragment_ids(path: Path) -> set[str]:
     )
 
     for tag in INLINE_HTML_TAG_RE.finditer(visible_html_source):
+        if is_backslash_escaped(visible_html_source, tag.start()):
+            continue
         source = tag.group(0)
         if source.startswith("</"):
             continue
