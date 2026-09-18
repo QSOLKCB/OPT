@@ -102,7 +102,6 @@ SOURCE_COMMIT_CONTEXT_RE = re.compile(
     r"(?:"
     r"\b(?:commit(?:[ \t]+sha)?|sha|revision|rev)\b[^0-9A-Za-z]{0,12}"
     r"|\b(?:pinned|inspected)[ \t]+at\b[^0-9A-Za-z]{0,12}"
-    r"|@"
     r")$",
     re.IGNORECASE,
 )
@@ -118,6 +117,10 @@ INLINE_HTML_TAG_RE = re.compile(
     r"(?:[ \t\r\n]+[A-Za-z_:][A-Za-z0-9_.:-]*"
     r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\"[^\"]*\"|'[^']*'|[^ \t\r\n\"'=<>\x60]+))?)*"
     r"[ \t\r\n]*/?>"
+)
+NONRENDERING_HTML_OPEN_RE = re.compile(
+    r"<(?P<tag>script|style|template|head|title)(?:[ \t\r\n/>]|$)",
+    re.IGNORECASE,
 )
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
 SECTION_BOUNDARY_RE = re.compile(r"^#{1,2}(?:\s|$)")
@@ -370,6 +373,44 @@ def _line_keeps_paragraph_open(raw: str, was_open: bool = False) -> bool:
     if LIST_MARKER_ONLY_RE.fullmatch(stripped) or stripped == ">":
         return False
     return True
+
+
+def strip_nonrendering_html_regions(
+    text: str, hidden_tag: str | None
+) -> tuple[str, str | None]:
+    """Remove nested HTML regions whose contents are not visibly rendered."""
+    out: list[str] = []
+    index = 0
+
+    while index < len(text):
+        if hidden_tag is not None:
+            close = re.search(
+                rf"</{re.escape(hidden_tag)}[ \\t\\r\\n]*>",
+                text[index:],
+                re.IGNORECASE,
+            )
+            if close is None:
+                return "".join(out), hidden_tag
+            index += close.end()
+            hidden_tag = None
+            continue
+
+        opener = NONRENDERING_HTML_OPEN_RE.search(text, index)
+        if opener is None:
+            out.append(text[index:])
+            break
+
+        out.append(text[index : opener.start()])
+        tag = opener.group("tag").lower()
+        tag_match = INLINE_HTML_TAG_RE.match(text, opener.start())
+        if tag_match is not None and tag_match.group(0).rstrip().endswith("/>"):
+            index = tag_match.end()
+            continue
+
+        hidden_tag = tag
+        index = tag_match.end() if tag_match is not None else opener.end()
+
+    return "".join(out), hidden_tag
 
 
 def visible_nonfenced_lines(
