@@ -1763,29 +1763,35 @@ def source_section_has_identity(lines: list[str]) -> bool:
     visible = list(lines)
     hidden_reference_lines, destinations = reference_definition_scan(visible)
 
-    rendered_source_lines: list[str] = []
-    for index, raw in enumerate(visible):
-        if index in hidden_reference_lines:
-            continue
+    rendered_source_lines = [
+        raw
+        for index, raw in enumerate(visible)
+        if index not in hidden_reference_lines
+    ]
+    raw_source = "\n".join(rendered_source_lines)
 
-        raw_source = raw.strip()
-        html_destinations = html_anchor_hrefs(raw_source)
-        source = strip_inline_html_constructs(raw_source)
-        destinations_inline = inline_link_destinations(source)
-        visible_source = strip_inline_links(source)
-        line = commonmark_unescape_outside_code_spans(visible_source)
+    # Parse complete HTML constructs across line endings before stripping them so
+    # attribute metadata cannot leak into rendered provenance text. Retain only
+    # actual anchor href values as source destinations.
+    html_destinations = html_anchor_hrefs(raw_source)
+    source = strip_inline_html_constructs(raw_source)
+    destinations_inline = inline_link_destinations(source)
+    visible_source = strip_inline_links(source)
+    rendered_source = commonmark_unescape_outside_code_spans(visible_source)
 
-        if not line or SOURCE_PLACEHOLDER_RE.fullmatch(line):
-            continue
-        rendered_source_lines.append(source)
-        if source_text_has_identity(line, sources_root):
+    if (
+        rendered_source.strip()
+        and not SOURCE_PLACEHOLDER_RE.fullmatch(rendered_source.strip())
+        and source_text_has_identity(rendered_source, sources_root)
+    ):
+        return True
+
+    for destination in (*html_destinations, *destinations_inline):
+        rendered_destination = commonmark_unescape_outside_code_spans(destination)
+        if source_text_has_identity(rendered_destination, sources_root):
             return True
-        for destination in (*html_destinations, *destinations_inline):
-            rendered_destination = commonmark_unescape_outside_code_spans(destination)
-            if source_text_has_identity(rendered_destination, sources_root):
-                return True
 
-    used_labels = used_reference_labels("\n".join(rendered_source_lines))
+    used_labels = used_reference_labels(source)
     for label in used_labels:
         destination = destinations.get(label)
         if destination is None:
@@ -1824,6 +1830,8 @@ def status_category_source(raw: str) -> str:
         if char == "&":
             reference = CHARACTER_REFERENCE_RE.match(raw, index)
             if reference is not None:
+                if html.unescape(reference.group(0)) == ";":
+                    return raw[:index]
                 index = reference.end()
                 continue
 
