@@ -274,7 +274,7 @@ def _reference_line_interrupts_paragraph(raw: str, paragraph_open: bool) -> bool
         return True
     if re.match(r"^ {0,3}[-+*][ \t]+", raw):
         return True
-    ordered = re.match(r"^ {0,3}(?P<number>\d+)[.)][ \t]+", raw)
+    ordered = re.match(r"^ {0,3}(?P<number>\d{1,9})[.)][ \t]+", raw)
     if ordered is not None:
         return not paragraph_open or ordered.group("number") == "1"
     return False
@@ -309,9 +309,9 @@ def _reference_definition_source_lines(text: str) -> list[str]:
             return "tag", type1.group("tag").lower()
         if re.match(r"^ {0,3}<\?", raw):
             return "token", "?>"
-        if re.match(r"^ {0,3}<!\[CDATA\[", raw, re.IGNORECASE):
+        if re.match(r"^ {0,3}<!\[CDATA\[", raw):
             return "token", "]]>"
-        if re.match(r"^ {0,3}<![A-Z]", raw, re.IGNORECASE):
+        if re.match(r"^ {0,3}<![A-Z]", raw):
             return "token", ">"
         block_tag = re.match(
             r"^ {0,3}</?(?P<tag>[A-Za-z][A-Za-z0-9-]*)(?:[ \t\n/>]|$)",
