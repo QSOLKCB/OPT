@@ -814,8 +814,7 @@ def inline_html_construct_end(text: str, index: int) -> int | None:
     if index >= len(text) or text[index] != "<" or is_backslash_escaped(text, index):
         return None
     if text.startswith("<!--", index):
-        end = text.find("-->", index + 4)
-        return None if end < 0 else end + 3
+        return inline_html_comment_end(text, index)
     if text.startswith("<?", index):
         end = text.find("?>", index + 2)
         return None if end < 0 else end + 2
@@ -855,7 +854,7 @@ def rendered_record_label(value: str) -> str:
             and code_text.strip()
         ):
             code_text = code_text[1:-1]
-        return html.unescape(code_text)
+        return code_text
 
     result = unwrap_outer_formatting(stripped, EMPHASIS_WRAPPERS)
     result = commonmark_unescape(result)
@@ -1094,57 +1093,165 @@ def rendered_inline_text(value: str) -> str:
     text = strip_inline_links(text)
     text = REFERENCE_IMAGE_RE.sub(lambda m: m.group(1), text)
     text = REFERENCE_LINK_RE.sub(lambda m: m.group(1), text)
-    text = INLINE_HTML_TAG_RE.sub("", text)
+    text = strip_inline_html_constructs(text)
     text = re.sub(r"[`*_~]", "", text)
     text = commonmark_unescape(text)
     for token, code_text in protected_code.items():
         text = text.replace(token, code_text)
-    return html.unescape(text).strip()
+    return text.strip()
+
+
+def decode_visible_character_references(text: str) -> str:
+    protected_text, protected_code = protect_code_spans(text)
+    protected_text = decode_character_references(protected_text)
+    for token, code_text in protected_code.items():
+        protected_text = protected_text.replace(token, code_text)
+    return protected_text
 
 
 def has_substantive_rendered_text(value: str) -> bool:
     return any(ch.isalnum() for ch in rendered_inline_text(value))
 
 
+def _parse_reference_definition_destination(value: str) -> tuple[str, str] | None:
+    source = value.lstrip(" \t")
+    if not source:
+        return None
+    if source.startswith("<"):
+        end = source.find(">", 1)
+        if end < 0 or "<" in source[1:end]:
+            return None
+        return source[1:end], source[end + 1 :]
+    index = 0
+    depth = 0
+    while index < len(source):
+        char = source[index]
+        if char == "\\" and index + 1 < len(source):
+            index += 2
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        elif char in " \t" and depth == 0:
+            break
+        elif char in "<>" or ord(char) < 0x20:
+            return None
+        index += 1
+    if index == 0 or depth != 0:
+        return None
+    return source[:index], source[index:]
+
+
+def _reference_title_complete(value: str) -> bool:
+    value = value.strip()
+    if len(value) < 2 or value[0] not in ('"', "'", "("):
+        return False
+    closer = ")" if value[0] == "(" else value[0]
+    if value[-1] != closer:
+        return False
+    inner = value[1:-1]
+    escaped = False
+    for char in inner:
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == closer:
+            return False
+    return True
+
+
 def reference_definition_hidden_indexes(lines: list[str]) -> set[int]:
-    """Return source indexes consumed by non-rendering reference definitions."""
+    """Return source indexes consumed by rendered reference definitions."""
     hidden: set[int] = set()
     prefix_re = re.compile(
         r"^ {0,3}\[(?P<label>(?:\\.|[^\[\]\\])+)\]:[ \t]*(?P<rest>.*)$"
     )
     index = 0
+    paragraph_open = False
+
     while index < len(lines):
-        match = prefix_re.fullmatch(lines[index])
-        if match is None or len(match.group("label")) > 999:
+        raw = lines[index]
+        if not raw.strip():
+            paragraph_open = False
+            index += 1
+            continue
+
+        match = prefix_re.fullmatch(raw)
+        if match is None or paragraph_open or len(match.group("label")) > 999:
+            paragraph_open = _line_keeps_paragraph_open(raw, paragraph_open)
             index += 1
             continue
 
         rest = match.group("rest")
-        hidden.add(index)
         consumed = 1
+        hidden_indexes = [index]
 
         if not rest:
             if (
-                index + 1 < len(lines)
-                and re.match(r"^ {1,3}\S", lines[index + 1])
+                index + consumed < len(lines)
+                and re.match(r"^ {1,3}\S", lines[index + consumed])
             ):
-                hidden.add(index + 1)
+                rest = lines[index + consumed].lstrip(" ")
+                hidden_indexes.append(index + consumed)
                 consumed += 1
             else:
-                hidden.discard(index)
+                paragraph_open = True
                 index += 1
                 continue
 
-        if (
-            index + consumed < len(lines)
-            and LINK_REFERENCE_TITLE_CONTINUATION_RE.fullmatch(
-                lines[index + consumed]
-            )
-        ):
-            hidden.add(index + consumed)
-            consumed += 1
+        parsed = _parse_reference_definition_destination(rest)
+        if parsed is None:
+            paragraph_open = True
+            index += 1
+            continue
 
+        _destination, tail = parsed
+        title = tail.strip()
+        if title:
+            while not _reference_title_complete(title):
+                if (
+                    index + consumed >= len(lines)
+                    or not re.match(r"^ {1,3}\S", lines[index + consumed])
+                ):
+                    hidden_indexes = []
+                    break
+                title += "\n" + lines[index + consumed].lstrip(" ")
+                hidden_indexes.append(index + consumed)
+                consumed += 1
+            if not hidden_indexes:
+                paragraph_open = True
+                index += 1
+                continue
+        elif (
+            index + consumed < len(lines)
+            and re.match(r"^ {1,3}[\"'(]", lines[index + consumed])
+        ):
+            title = lines[index + consumed].lstrip(" ")
+            hidden_indexes.append(index + consumed)
+            consumed += 1
+            while not _reference_title_complete(title):
+                if (
+                    index + consumed >= len(lines)
+                    or not re.match(r"^ {1,3}\S", lines[index + consumed])
+                ):
+                    hidden_indexes = []
+                    break
+                title += "\n" + lines[index + consumed].lstrip(" ")
+                hidden_indexes.append(index + consumed)
+                consumed += 1
+            if not hidden_indexes:
+                paragraph_open = True
+                index += 1
+                continue
+
+        hidden.update(hidden_indexes)
+        paragraph_open = False
         index += consumed
+
     return hidden
 
 
@@ -1177,9 +1284,13 @@ def section_has_content(lines: list[str]) -> bool:
 
 
 def source_section_has_identity(lines: list[str]) -> bool:
-    """Require at least one concrete, non-placeholder provenance identity."""
+    """Require at least one concrete, rendered provenance identity."""
     sources_root = (ROOT / "sources").resolve()
-    for raw in visible_nonfenced_lines(lines):
+    visible = visible_nonfenced_lines(lines)
+    hidden_reference_lines = reference_definition_hidden_indexes(visible)
+    for index, raw in enumerate(visible):
+        if index in hidden_reference_lines:
+            continue
         line = strip_inline_html_constructs(raw.strip())
         if not line or SOURCE_PLACEHOLDER_RE.fullmatch(line):
             continue
@@ -1390,6 +1501,7 @@ for doc_name in ("README.md", "CATALOG.md"):
 
 catalog = (ROOT / "CATALOG.md").read_text(encoding="utf-8")
 visible_catalog = strip_inline_html_constructs(visible_text(catalog))
+visible_catalog = decode_visible_character_references(visible_catalog)
 catalog_ids = set(OPT_TOKEN_RE.findall(visible_catalog))
 unknown_catalog_ids = sorted(catalog_ids - records.keys())
 if unknown_catalog_ids:
