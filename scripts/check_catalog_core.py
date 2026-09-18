@@ -404,14 +404,21 @@ def strip_nonrendering_html_regions(
 
     while index < len(text):
         if hidden_tag is not None:
-            close = re.search(
+            close_re = re.compile(
                 rf"</{re.escape(hidden_tag)}[ \t\r\n]*>",
-                text[index:],
                 re.IGNORECASE,
             )
+            close = None
+            for candidate in close_re.finditer(text, index):
+                if (
+                    not honor_backslash_escapes
+                    or not is_backslash_escaped(text, candidate.start())
+                ):
+                    close = candidate
+                    break
             if close is None:
                 return "".join(out), hidden_tag
-            index += close.end()
+            index = close.end()
             hidden_tag = None
             continue
 
@@ -1230,7 +1237,7 @@ def html_anchor_hrefs(text: str) -> list[str]:
             href_match = HTML_HREF_RE.search(tag_source)
             if href_match is not None:
                 href = next(value for value in href_match.groups() if value is not None)
-                hrefs.append(html.unescape(href))
+                hrefs.append(decode_html_attribute_references(href))
         index = tag.end()
     return hrefs
 
@@ -1279,7 +1286,7 @@ def visible_html_record_links(text: str) -> list[tuple[str, str]]:
 
         rendered_label = rendered_inline_text(text[label_start:label_end])
         if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label):
-            links.append((rendered_label, html.unescape(href)))
+            links.append((rendered_label, decode_html_attribute_references(href)))
 
         index = next_index
 
