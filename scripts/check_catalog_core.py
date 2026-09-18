@@ -440,6 +440,8 @@ def visible_nonfenced_lines(
     html_list_indent = 0
     raw_html_comment = False
     raw_html_source_comment = False
+    raw_html_hidden_tag: str | None = None
+    raw_html_source_hidden_tag: str | None = None
     paragraph_open = False
 
     def append_visible(source_index: int, value: str) -> None:
@@ -452,11 +454,14 @@ def visible_nonfenced_lines(
             append_visible(source_index, "")
 
     def append_raw_html_source(source_index: int, value: str) -> None:
-        nonlocal raw_html_source_comment
+        nonlocal raw_html_source_comment, raw_html_source_hidden_tag
         if raw_html_source is None and raw_html_source_events is None:
             return
         rendered, raw_html_source_comment = strip_inline_html_comments(
             value, raw_html_source_comment
+        )
+        rendered, raw_html_source_hidden_tag = strip_nonrendering_html_regions(
+            rendered, raw_html_source_hidden_tag
         )
         if rendered.strip():
             if raw_html_source is not None:
@@ -465,11 +470,14 @@ def visible_nonfenced_lines(
                 raw_html_source_events.append((source_index, rendered))
 
     def append_raw_html_text(source_index: int, value: str) -> None:
-        nonlocal raw_html_comment
+        nonlocal raw_html_comment, raw_html_hidden_tag
         if raw_html_text is None and raw_html_events is None:
             return
         rendered, raw_html_comment = strip_inline_html_comments(
             value, raw_html_comment
+        )
+        rendered, raw_html_hidden_tag = strip_nonrendering_html_regions(
+            rendered, raw_html_hidden_tag
         )
         rendered = strip_inline_html_constructs(rendered)
         if rendered.strip():
@@ -526,6 +534,8 @@ def visible_nonfenced_lines(
                 html_list_indent = 0
                 raw_html_comment = False
                 raw_html_source_comment = False
+                raw_html_hidden_tag = None
+                raw_html_source_hidden_tag = None
                 boundary(source_index)
             else:
                 paragraph_open = False
@@ -555,6 +565,8 @@ def visible_nonfenced_lines(
                         html_list_indent = 0
                         raw_html_comment = False
                         raw_html_source_comment = False
+                        raw_html_hidden_tag = None
+                        raw_html_source_hidden_tag = None
                     continue
                 if html_mode == "token":
                     if html_end is not None and html_end in html_view:
@@ -564,6 +576,8 @@ def visible_nonfenced_lines(
                         html_list_indent = 0
                         raw_html_comment = False
                         raw_html_source_comment = False
+                        raw_html_hidden_tag = None
+                        raw_html_source_hidden_tag = None
                     continue
                 if html_mode == "blank":
                     if (raw_html_source is not None or raw_html_source_events is not None) and html_view.strip():
@@ -577,6 +591,8 @@ def visible_nonfenced_lines(
                         html_list_indent = 0
                         raw_html_comment = False
                         raw_html_source_comment = False
+                        raw_html_hidden_tag = None
+                        raw_html_source_hidden_tag = None
                         boundary(source_index)
                     continue
 
@@ -659,6 +675,8 @@ def visible_nonfenced_lines(
                         html_list_indent = 0
                         raw_html_comment = False
                         raw_html_source_comment = False
+                        raw_html_hidden_tag = None
+                        raw_html_source_hidden_tag = None
                     continue
 
                 raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
@@ -1988,7 +2006,6 @@ for path in sorted(OPT_DIR.glob("*.md")):
     source_evidence = section_lines(
         text,
         "## Source evidence",
-        include_raw_html_text=True,
         include_raw_html_source=True,
     )
     if not source_section_has_identity(source_evidence):
