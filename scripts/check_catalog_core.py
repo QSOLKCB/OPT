@@ -130,6 +130,10 @@ SOURCE_PLACEHOLDER_RE = re.compile(
 )
 REFERENCE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[[^\]]*\]")
 REFERENCE_LINK_RE = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
+HTML_ALT_ATTR_RE = re.compile(
+    r"""(?:^|[ \t\r\n])alt[ \t\r\n]*=[ \t\r\n]*(?:"([^"]*)"|'([^']*)'|([^ \t\r\n"'=<>\x60]+))""",
+    re.IGNORECASE,
+)
 INLINE_HTML_TAG_RE = re.compile(
     r"</?[A-Za-z][A-Za-z0-9-]*"
     r"(?:[ \t\r\n]+[A-Za-z_:][A-Za-z0-9_.:-]*"
@@ -620,7 +624,7 @@ def visible_nonfenced_lines(
                 if (
                     (raw_html_source is not None or raw_html_source_events is not None)
                     and html_mode == "tag"
-                    and html_end == "pre"
+                    and html_end in {"pre", "textarea"}
                 ):
                     append_raw_html_source(source_index, html_view)
                 if (
@@ -720,7 +724,7 @@ def visible_nonfenced_lines(
                     html_list_indent = current_list_indent or 0
                     if (raw_html_source is not None or raw_html_source_events is not None) and (
                         html_mode == "blank"
-                        or (html_mode == "tag" and html_end == "pre")
+                        or (html_mode == "tag" and html_end in {"pre", "textarea"})
                     ):
                         append_raw_html_source(source_index, block_view)
                     if (raw_html_text is not None or raw_html_events is not None) and (
@@ -1696,6 +1700,21 @@ def strip_paired_inline_formatting(text: str) -> str:
     return text
 
 
+def preserve_html_image_alt_text(text: str) -> str:
+    """Replace visible HTML image tags with their decoded accessible alt text."""
+    def replace(match: re.Match[str]) -> str:
+        source = match.group(0)
+        if re.match(r"<img(?:[ \t\r\n]|/?>)", source, re.IGNORECASE) is None:
+            return source
+        alt_match = HTML_ALT_ATTR_RE.search(source)
+        if alt_match is None:
+            return ""
+        alt = next(value for value in alt_match.groups() if value is not None)
+        return decode_html_attribute_references(alt)
+
+    return INLINE_HTML_TAG_RE.sub(replace, text)
+
+
 def rendered_inline_text(value: str) -> str:
     """Approximate rendered inline text for required field-value validation."""
     text, protected_code = protect_code_spans(value)
@@ -1707,6 +1726,7 @@ def rendered_inline_text(value: str) -> str:
         None,
         honor_backslash_escapes=True,
     )
+    text = preserve_html_image_alt_text(text)
     text = strip_inline_html_constructs(text)
     text = strip_paired_inline_formatting(text)
     text = commonmark_unescape(text)
@@ -2116,11 +2136,6 @@ def source_text_has_direct_identity(line: str) -> bool:
     if any(valid_http_source_url(match.group(0)) for match in SOURCE_URL_RE.finditer(line)):
         return True
     if SOURCE_DOI_RE.search(line):
-        return True
-    if any(
-        source_commit_has_context(line, match)
-        for match in SOURCE_COMMIT_RE.finditer(line)
-    ):
         return True
     if any(
         valid_repository_identity(match.group("owner"), match.group("repo"))
