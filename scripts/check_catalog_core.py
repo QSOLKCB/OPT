@@ -1415,7 +1415,7 @@ HTML_HREF_RE = re.compile(
 
 
 def strip_preformatted_html_scan_contents(text: str) -> str:
-    """Remove pre/textarea contents from scans that look for active HTML markup."""
+    """Remove textarea contents from scans that look for active HTML markup."""
     out: list[str] = []
     index = 0
 
@@ -1433,7 +1433,7 @@ def strip_preformatted_html_scan_contents(text: str) -> str:
 
         source = tag.group(0)
         opener = re.match(
-            r"<(?P<tag>pre|textarea)(?:[ \t\r\n/>]|$)",
+            r"<(?P<tag>textarea)(?:[ \t\r\n/>]|$)",
             source,
             re.IGNORECASE,
         )
