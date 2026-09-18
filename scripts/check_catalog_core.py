@@ -1760,7 +1760,7 @@ def source_text_has_identity(line: str, sources_root: Path) -> bool:
 def source_section_has_identity(lines: list[str]) -> bool:
     """Require at least one concrete, rendered provenance identity."""
     sources_root = (ROOT / "sources").resolve()
-    visible = visible_nonfenced_lines(lines)
+    visible = list(lines)
     hidden_reference_lines, destinations = reference_definition_scan(visible)
 
     rendered_source_lines: list[str] = []
