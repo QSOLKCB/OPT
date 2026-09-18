@@ -588,12 +588,30 @@ def setext_heading_start(
     return start
 
 
+def normalized_visible_heading(line: str) -> str | None:
+    """Return a rendered ATX heading identity while preserving its level."""
+    match = re.match(r"^(?P<hashes>#{1,6})(?:[ \t]+|$)(?P<body>.*)$", line)
+    if match is None:
+        return None
+
+    body = match.group("body")
+    body = re.sub(r"[ \t]+#+[ \t]*$", "", body)
+    rendered = rendered_inline_text(body).strip()
+    return f"{match.group('hashes')} {rendered}" if rendered else match.group("hashes")
+
+
 def section_lines(text: str, heading: str) -> list[str]:
-    """Return one exact visible level-2 Markdown section."""
+    """Return one exact rendered level-2 Markdown section."""
     lines = visible_nonfenced_lines(markdown_source_lines(text))
-    try:
-        start = lines.index(heading) + 1
-    except ValueError:
+    start = next(
+        (
+            index + 1
+            for index, line in enumerate(lines)
+            if normalized_visible_heading(line) == heading
+        ),
+        None,
+    )
+    if start is None:
         return []
     end = len(lines)
     for i in range(start, len(lines)):
@@ -1158,6 +1176,15 @@ def decode_visible_character_references(text: str) -> str:
     return protected_text
 
 
+def commonmark_unescape_outside_code_spans(value: str) -> str:
+    """Decode rendered escapes/references without decoding code-span contents."""
+    protected_text, protected_code = protect_code_spans(value)
+    rendered = commonmark_unescape(protected_text)
+    for token, code_text in protected_code.items():
+        rendered = rendered.replace(token, code_text)
+    return rendered
+
+
 def has_substantive_rendered_text(value: str) -> bool:
     return any(ch.isalnum() for ch in rendered_inline_text(value))
 
@@ -1347,6 +1374,7 @@ def source_section_has_identity(lines: list[str]) -> bool:
         if index in hidden_reference_lines:
             continue
         line = strip_inline_html_constructs(raw.strip())
+        line = commonmark_unescape_outside_code_spans(line)
         if not line or SOURCE_PLACEHOLDER_RE.fullmatch(line):
             continue
         if SOURCE_URL_RE.search(line) or SOURCE_DOI_RE.search(line):
@@ -1369,9 +1397,45 @@ def source_section_has_identity(lines: list[str]) -> bool:
     return False
 
 
+def status_category_source(raw: str) -> str:
+    """Return the status category before a real caveat separator."""
+    index = 0
+    code_run_len: int | None = None
+    while index < len(raw):
+        char = raw[index]
+
+        if char == "`" and not is_backslash_escaped(raw, index):
+            run_len = backtick_run_length(raw, index)
+            if code_run_len is None:
+                code_run_len = run_len
+            elif run_len == code_run_len:
+                code_run_len = None
+            index += run_len
+            continue
+
+        if code_run_len is not None:
+            index += 1
+            continue
+
+        if char == "\\" and index + 1 < len(raw):
+            index += 2
+            continue
+
+        if char == "&":
+            reference = CHARACTER_REFERENCE_RE.match(raw, index)
+            if reference is not None:
+                index = reference.end()
+                continue
+
+        if char == ";":
+            return raw[:index]
+        index += 1
+    return raw
+
+
 def normalized_status_category(raw: str) -> str:
-    category = raw.split(";", 1)[0].strip()
-    return unwrap_outer_formatting(category, STATUS_WRAPPERS)
+    category = status_category_source(raw).strip()
+    return rendered_inline_text(category).strip()
 
 
 def require_prefixed_fields(
@@ -1444,7 +1508,7 @@ for path in sorted(OPT_DIR.glob("*.md")):
     if record_id in FROZEN_V1:
         continue
 
-    status_category = statuses[0].split(";", 1)[0].strip()
+    status_category = normalized_status_category(statuses[0])
     if status_category not in ALLOWED_V2_STATUS_CATEGORIES:
         die(
             f"{path.relative_to(ROOT)} uses undefined status category "
@@ -1452,7 +1516,12 @@ for path in sorted(OPT_DIR.glob("*.md")):
         )
     status_categories[record_id] = status_category
 
-    headings = {line for line in lines if line.startswith("## ")}
+    headings = {
+        rendered
+        for line in lines
+        if (rendered := normalized_visible_heading(line)) is not None
+        and rendered.startswith("## ")
+    }
     missing = sorted(REQUIRED_V2 - headings)
     if missing:
         die(f"{path.relative_to(ROOT)} missing visible sections: {', '.join(missing)}")
@@ -1561,6 +1630,10 @@ for doc_name in ("README.md", "CATALOG.md"):
 
 catalog = (ROOT / "CATALOG.md").read_text(encoding="utf-8")
 visible_catalog = strip_inline_html_constructs(visible_text(catalog))
+previous_catalog = None
+while visible_catalog != previous_catalog:
+    previous_catalog = visible_catalog
+    visible_catalog = strip_inline_links(visible_catalog)
 visible_catalog = decode_visible_character_references(visible_catalog)
 catalog_ids = set(OPT_TOKEN_RE.findall(visible_catalog))
 unknown_catalog_ids = sorted(catalog_ids - records.keys())
