@@ -9,7 +9,7 @@ import re
 import string
 from collections import Counter
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 OPT_DIR = ROOT / "optimizations"
@@ -126,13 +126,13 @@ SETEXT_H2_RE = re.compile(r"^ {0,3}-+[ \t]*$")
 THEMATIC_BREAK_RE = re.compile(
     r"^(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
 )
-LIST_MARKER_ONLY_RE = re.compile(r"^(?:[-+*]|\d+[.)])$")
+LIST_MARKER_ONLY_RE = re.compile(r"^(?:[-+*]|\d{1,9}[.)])$")
 TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
 FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 RAW_HTML_TYPE1_OPEN_RE = re.compile(
     r"^ {0,3}<(?P<tag>script|pre|style|textarea)(?:[ \t]|>|$)", re.IGNORECASE
 )
-RAW_HTML_DECLARATION_OPEN_RE = re.compile(r"^ {0,3}<![A-Z]", re.IGNORECASE)
+RAW_HTML_DECLARATION_OPEN_RE = re.compile(r"^ {0,3}<![A-Z]")
 RAW_HTML_BLOCK_TAG_RE = re.compile(
     r"^ {0,3}</?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t\n/>]|$)",
     re.IGNORECASE,
@@ -236,7 +236,7 @@ def strip_indent_columns(value: str, columns: int) -> str:
 
 
 def list_item_content(raw: str) -> tuple[int, str] | None:
-    match = re.match(r"^ {0,3}(?P<marker>[-+*]|\d+[.)])(?P<spacing>[ \t]+)", raw)
+    match = re.match(r"^ {0,3}(?P<marker>[-+*]|\d{1,9}[.)])(?P<spacing>[ \t]+)", raw)
     if match is None:
         return None
     marker_start = len(raw) - len(raw.lstrip(" "))
@@ -342,7 +342,7 @@ def raw_html_block_start(raw: str) -> tuple[str, str | None] | None:
         return "tag", type1.group("tag").lower()
     if re.match(r"^ {0,3}<\?", raw):
         return "token", "?>"
-    if re.match(r"^ {0,3}<!\[CDATA\[", raw, re.IGNORECASE):
+    if re.match(r"^ {0,3}<!\[CDATA\[", raw):
         return "token", "]] >".replace(" ", "")
     if RAW_HTML_DECLARATION_OPEN_RE.match(raw):
         return "token", ">"
@@ -1036,6 +1036,28 @@ HTML_HREF_RE = re.compile(
 )
 
 
+def html_anchor_hrefs(text: str) -> list[str]:
+    """Return decoded href values from syntactically valid HTML anchor start tags."""
+    hrefs: list[str] = []
+    index = 0
+    while index < len(text):
+        start = text.find("<", index)
+        if start < 0:
+            break
+        tag = INLINE_HTML_TAG_RE.match(text, start)
+        if tag is None:
+            index = start + 1
+            continue
+        tag_source = tag.group(0)
+        if re.match(r"<a(?:[ \t\r\n]|>)", tag_source, re.IGNORECASE):
+            href_match = HTML_HREF_RE.search(tag_source)
+            if href_match is not None:
+                href = next(value for value in href_match.groups() if value is not None)
+                hrefs.append(html.unescape(href))
+        index = tag.end()
+    return hrefs
+
+
 def visible_html_record_links(text: str) -> list[tuple[str, str]]:
     """Return OPT-labelled visible raw-HTML anchors and decoded href targets."""
     links: list[tuple[str, str]] = []
@@ -1654,7 +1676,9 @@ def source_section_has_identity(lines: list[str]) -> bool:
         if index in hidden_reference_lines:
             continue
 
-        source = strip_inline_html_constructs(raw.strip())
+        raw_source = raw.strip()
+        html_destinations = html_anchor_hrefs(raw_source)
+        source = strip_inline_html_constructs(raw_source)
         destinations_inline = inline_link_destinations(source)
         visible_source = strip_inline_links(source)
         line = commonmark_unescape_outside_code_spans(visible_source)
@@ -1664,7 +1688,7 @@ def source_section_has_identity(lines: list[str]) -> bool:
         rendered_source_lines.append(source)
         if source_text_has_identity(line, sources_root):
             return True
-        for destination in destinations_inline:
+        for destination in (*html_destinations, *destinations_inline):
             rendered_destination = commonmark_unescape_outside_code_spans(destination)
             if source_text_has_identity(rendered_destination, sources_root):
                 return True
@@ -1747,10 +1771,12 @@ def require_prefixed_fields(
                 f"{field} in {section}: '{value}'"
             )
         if rejected_values is not None:
-            normalized_value = html.unescape(
-                unwrap_outer_formatting(value, STATUS_WRAPPERS)
-            ).strip()
-            if normalized_value == rejected_values.get(field):
+            normalized_value = rendered_inline_text(value).rstrip(" \t.!?")
+            rejected_value = rejected_values.get(field)
+            if (
+                rejected_value is not None
+                and normalized_value == rejected_value.rstrip(" \t.!?")
+            ):
                 die(
                     f"{path.relative_to(ROOT)} has unselected template placeholder "
                     f"for {field} in {section}: '{value}'"
@@ -1841,6 +1867,66 @@ if missing_frozen:
 
 record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in records.items()}
 
+
+HTML_ANCHOR_ID_RE = re.compile(
+    r"""(?:^|[ \t\r\n])(?:id|name)[ \t\r\n]*=[ \t\r\n]*(?:"([^"]+)"|'([^']+)'|([^ \t\r\n"'=<>\x60]+))""",
+    re.IGNORECASE,
+)
+
+
+def github_heading_slug(value: str) -> str:
+    """Approximate GitHub's rendered heading fragment for repository headings."""
+    value = rendered_inline_text(value).strip().casefold()
+    value = re.sub(r"[^\w\- ]+", "", value, flags=re.UNICODE)
+    value = re.sub(r"[ \t\r\n]+", "-", value)
+    return value
+
+
+def record_fragment_ids(path: Path) -> set[str]:
+    text = path.read_text(encoding="utf-8")
+    anchors: set[str] = set()
+    slug_counts: Counter[str] = Counter()
+
+    for line in visible_nonfenced_lines(markdown_source_lines(text)):
+        heading = normalized_visible_heading(line)
+        if heading is None:
+            continue
+        match = re.match(r"^#{1,6}(?:[ \t]+|$)(?P<body>.*)$", heading)
+        if match is None:
+            continue
+        slug = github_heading_slug(match.group("body"))
+        if not slug:
+            continue
+        count = slug_counts[slug]
+        slug_counts[slug] += 1
+        anchors.add(slug if count == 0 else f"{slug}-{count}")
+
+    for tag in INLINE_HTML_TAG_RE.finditer(text):
+        source = tag.group(0)
+        for match in HTML_ANCHOR_ID_RE.finditer(source):
+            anchor = next(value for value in match.groups() if value is not None)
+            anchors.add(html.unescape(anchor))
+
+    return anchors
+
+
+record_fragment_cache: dict[Path, set[str]] = {}
+
+
+def validate_record_fragment(
+    target: Path, fragment: str, *, doc_name: str, destination: str
+) -> None:
+    if not fragment:
+        return
+    decoded = unquote(fragment)
+    anchors = record_fragment_cache.setdefault(target, record_fragment_ids(target))
+    if decoded not in anchors:
+        die(
+            f"broken visible record fragment in {doc_name}: "
+            f"{destination} (missing '#{decoded}')"
+        )
+
+
 for doc_name in ("README.md", "CATALOG.md"):
     text = (ROOT / doc_name).read_text(encoding="utf-8")
     raw_html_source: list[str] = []
@@ -1854,7 +1940,7 @@ for doc_name in ("README.md", "CATALOG.md"):
     record_links.extend(visible_html_record_links(rendered))
     record_links.extend(visible_html_record_links("\n".join(raw_html_source)))
     for label, destination in record_links:
-        rel, _separator, _fragment = destination.partition("#")
+        rel, separator, fragment = destination.partition("#")
         if not rel.startswith("optimizations/") or not rel.endswith(".md"):
             die(
                 f"visible record link in {doc_name} has invalid destination: "
@@ -1870,6 +1956,13 @@ for doc_name in ("README.md", "CATALOG.md"):
             die(
                 f"record link label mismatch in {doc_name}: '{label}' points to "
                 f"{target_id} ({rel})"
+            )
+        if separator:
+            validate_record_fragment(
+                target,
+                fragment,
+                doc_name=doc_name,
+                destination=destination,
             )
 
     if doc_name != "README.md":
