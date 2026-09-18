@@ -37,7 +37,7 @@ A validated parallel kernel is fast enough that repeatedly creating worker threa
 
 Persistent reuse changes worker lifetime, not computation semantics. Each dispatch must process the same logical work as the reference/spawned path, and reduction must remain deterministic where required. Buffer reuse must reset or overwrite all state that can affect a later dispatch.
 
-A failed or cancelled dispatch may be followed by reuse only after every worker-local buffer, queue, completion flag and dispatch-generation marker is returned to a known clean state. If that reset cannot be proven complete, mark the pool unusable and create a fresh pool before accepting more work.
+A failed or cancelled dispatch may be followed by reuse only after every worker-local buffer, queue, completion flag and dispatch-generation marker is returned to a known clean state. If that reset cannot be proven complete, retire the pool. A retired pool must not be replaced while any worker from its dispatch generation can still publish externally visible state unless every such publication is guarded by a generation fence that rejects retired generations. Otherwise require full quiescence/join of the retired workers before the replacement pool may begin accepting work.
 
 Concurrency evidence is part of the claim boundary rather than the computation contract. A pool may involve multiple workers yet still execute effectively serially because of locks, queue policy, scheduler throttling, cgroup limits or runtime serialization. Such a path can still be semantically correct, but it must not be described as providing parallel execution unless overlapping active work is actually observed.
 
@@ -47,7 +47,7 @@ Create workers once, allocate their reusable local buffers once, and dispatch re
 
 Expose topology policy explicitly. A `physical-first` policy may cap workers at detected physical cores; a `logical` policy may include SMT threads. Detection must fail softly and record the fallback instead of pretending unavailable topology data is authoritative.
 
-Treat dispatch completion as a state transition. Successful completion must leave all reusable state ready for the next generation. Failure or cancellation must either run the same complete reset protocol or retire the pool so partial state cannot leak into a later dispatch.
+Treat dispatch completion as a state transition. Successful completion must leave all reusable state ready for the next generation. Failure or cancellation must either run the same complete reset protocol or retire the pool so partial state cannot leak into a later dispatch. Retirement is not sufficient by itself: before a successor dispatch begins, either join/quiesce every worker from the retired generation or enforce a generation check on every write to shared output, completion state, queues, callbacks and other externally visible publication points so a late retired worker is unable to mutate successor state.
 
 Separate **worker participation** from **simultaneous overlap**. Instrument workload-shaped dispatches with an active-worker counter, timestamped task intervals, scheduler/runtime tracing, or another measurement that can establish how much work actually overlapped. Record at least the observed peak simultaneous active work and, where useful, overlap duration/fraction or a concurrency histogram. A queue that eventually touches every worker but runs only one task at a time is not evidence of parallel execution.
 
@@ -60,6 +60,7 @@ Separate steady-state dispatch timing from startup/teardown, then include lifecy
 - Cold baseline: spawned worker-local SoA creates worker threads for each complete execution.
 - Warm/no-op baseline where relevant: persistent steady-state dispatch excludes startup but records pool startup separately.
 - Small invalidation / partial-work case where relevant: repeated first/second dispatch parity verifies reused state does not leak.
+- Cancellation-generation fence fixture: pause an old-generation worker after partial activity, cancel and retire its pool, start the succeeding dispatch, then resume the paused worker. The fixture must prove either that replacement waited for old-worker quiescence/join or that every attempted late publication from the retired generation is rejected and cannot alter successor output, queues, completion state or external callbacks.
 - Large invalidation / full-work case where relevant: bounded production receipts exercise persistent dispatch across selected worker counts.
 - Optimized: one persistent worker set and reusable tile buffers across warm-up and measured repetitions.
 - Speedup / memory / I/O / quality change: donor establishes the mechanism and verification boundary but does not provide a universal scaling claim in the PR summary.
@@ -67,7 +68,7 @@ Separate steady-state dispatch timing from startup/teardown, then include lifecy
 
 ## Validation
 
-Require equality among canonical/reference output, spawned optimized output, first persistent dispatch and subsequent persistent dispatches. In addition to ordinary repeated-success cases, force success → failure → success and success → cancellation → success sequences after partial worker activity. Verify that every reusable buffer, queue, completion record and dispatch generation is reset before the final success, or verify that the affected pool is retired and replaced before reuse. Test shutdown, worker-count changes, topology fallback and completion-order independence.
+Require equality among canonical/reference output, spawned optimized output, first persistent dispatch and subsequent persistent dispatches. In addition to ordinary repeated-success cases, force success → failure → success and success → cancellation → success sequences after partial worker activity. Verify that every reusable buffer, queue, completion record and dispatch generation is reset before the final success. When the affected pool is retired, run a late-worker fixture that deliberately holds one old-generation worker across cancellation until after the successor dispatch has started, then resumes it. Accept replacement only if the old generation was fully quiesced/joined before successor start or if generation fences reject every late externally visible publication from that worker. Test shutdown, worker-count changes, topology fallback and completion-order independence.
 
 For every workload-shaped dispatch used to support a parallelism or scaling claim, instrument **observed simultaneous active work** or an equivalent overlap metric. Record requested workers, configured/effective workers, topology source, observed peak concurrent activity, and preferably overlap duration/fraction or a concurrency histogram. Verify the metric itself against a deliberately serialized control. If a queue, lock, runtime limit, scheduler policy or cgroup causes configured workers to take turns without overlapping, report the execution as serialized/limited rather than treating worker participation as concurrency evidence. Compare the overlap data with measured speedup so apparent scaling cannot be attributed to concurrency that never occurred.
 
@@ -82,6 +83,7 @@ Re-profile pool lifetime, worker count, SMT policy, buffer size, task granularit
 - The workload is too infrequent to amortize pool startup and retained resources.
 - Reused buffers leak stale state between dispatches.
 - A failed/cancelled dispatch leaves partial buffers, queue entries or completion state that contaminates the next generation.
+- A worker from a retired generation resumes after replacement and publishes stale output, completion, queue or callback state into the succeeding dispatch.
 - SMT/logical workers increase contention or memory pressure.
 - Container CPU allowance or topology changes after pool creation.
 - Multiple workers participate but a lock, queue, runtime limit, scheduler or cgroup serializes the hot work, creating false concurrency evidence.
@@ -90,7 +92,7 @@ Re-profile pool lifetime, worker count, SMT policy, buffer size, task granularit
 
 ## Rollback trigger
 
-Use spawned/canonical execution on any parity failure, stale-state leak, failed-dispatch reset failure, shutdown/resource leak, topology mismatch, or lifecycle-adjusted slowdown for the target repetition horizon. Retire a pool immediately when a failure/cancellation leaves its reusable state uncertain. Disable physical-first selection when topology detection is unreliable and record the fallback. If the optimization depends on parallel execution but workload-shaped measurements show no meaningful simultaneous overlap, withdraw the parallelism claim and re-profile or fall back rather than promoting the configured worker count as effective concurrency.
+Use spawned/canonical execution on any parity failure, stale-state leak, failed-dispatch reset failure, late retired-generation publication, shutdown/resource leak, topology mismatch, or lifecycle-adjusted slowdown for the target repetition horizon. Retire a pool immediately when a failure/cancellation leaves its reusable state uncertain, and do not start a replacement until the retired generation is quiescent/joined or every externally visible publication is generation-fenced. Disable physical-first selection when topology detection is unreliable and record the fallback. If the optimization depends on parallel execution but workload-shaped measurements show no meaningful simultaneous overlap, withdraw the parallelism claim and re-profile or fall back rather than promoting the configured worker count as effective concurrency.
 
 ## Composition notes
 
