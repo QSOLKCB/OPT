@@ -542,12 +542,42 @@ def canonicalize_nested_reference_definitions(text: str) -> str:
     fence_char: str | None = None
     fence_len = 0
     fence_requires_quote = False
+    html_mode: str | None = None
+    html_end: str | None = None
+    html_requires_quote = False
     fence_open_re = re.compile(
         r"^ {0,3}((?:[~]{3,}|[" + chr(96) + r"]{3,}))(.*)$"
     )
     definition_prefix_re = re.compile(
         r"^\[(?:\\.|[^\[\]\\])+\]:[ \t]*(?P<rest>.*)$"
     )
+
+    def html_start(view: str) -> tuple[str, str | None] | None:
+        if re.match(r"^ {0,3}<!--", view):
+            return "token", "-->"
+        type1 = re.match(
+            r"^ {0,3}<(?P<tag>script|pre|style|textarea)(?:[ \t]|>|$)",
+            view,
+            re.IGNORECASE,
+        )
+        if type1 is not None:
+            return "tag", type1.group("tag").lower()
+        if re.match(r"^ {0,3}<\?", view):
+            return "token", "?>"
+        if re.match(r"^ {0,3}<!\[CDATA\[", view, re.IGNORECASE):
+            return "token", "]]>"
+        if re.match(r"^ {0,3}<![A-Z]", view, re.IGNORECASE):
+            return "token", ">"
+        block_tag = re.match(
+            r"^ {0,3}</?(?P<tag>[A-Za-z][A-Za-z0-9-]*)(?:[ \t\n/>]|$)",
+            view,
+        )
+        if (
+            block_tag is not None
+            and block_tag.group("tag").lower() in HTML_BLOCK_TAGS
+        ):
+            return "blank", None
+        return None
 
     for raw in text.splitlines(keepends=True):
         content = raw.rstrip("\r\n")
@@ -593,6 +623,37 @@ def canonicalize_nested_reference_definitions(text: str) -> str:
             elif content.strip():
                 active_list_indent = None
 
+        if html_mode is not None:
+            if html_requires_quote and not quoted:
+                html_mode = None
+                html_end = None
+                html_requires_quote = False
+            else:
+                html_view = view
+                if html_mode == "tag":
+                    if html_end is not None and re.search(
+                        rf"</{re.escape(html_end)}>", html_view, re.IGNORECASE
+                    ):
+                        html_mode = None
+                        html_end = None
+                        html_requires_quote = False
+                    out.append(raw)
+                    continue
+                if html_mode == "token":
+                    if html_end is not None and html_end in html_view:
+                        html_mode = None
+                        html_end = None
+                        html_requires_quote = False
+                    out.append(raw)
+                    continue
+                if html_mode == "blank":
+                    if not html_view.strip():
+                        html_mode = None
+                        html_end = None
+                        html_requires_quote = False
+                    out.append(raw)
+                    continue
+
         fence = fence_open_re.match(view)
         if exposed and fence is not None:
             run = fence.group(1)
@@ -606,6 +667,26 @@ def canonicalize_nested_reference_definitions(text: str) -> str:
                 paragraph_open = False
                 out.append(raw)
                 continue
+
+        started_html = html_start(view) if exposed else None
+        if started_html is not None:
+            html_mode, html_end = started_html
+            html_requires_quote = quoted
+            reference_title_expected = False
+            reference_destination_expected = False
+            paragraph_open = False
+            if html_mode == "tag" and html_end is not None and re.search(
+                rf"</{re.escape(html_end)}>", view, re.IGNORECASE
+            ):
+                html_mode = None
+                html_end = None
+                html_requires_quote = False
+            elif html_mode == "token" and html_end is not None and html_end in view:
+                html_mode = None
+                html_end = None
+                html_requires_quote = False
+            out.append(raw)
+            continue
 
         if not exposed:
             paragraph_open = False
