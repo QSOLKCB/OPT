@@ -2355,9 +2355,17 @@ def valid_repository_identity(owner: str, repo: str) -> bool:
     return True
 
 
+def source_url_candidate(value: str) -> str:
+    """Trim terminal prose punctuation that is not part of a rendered bare URL."""
+    return value.rstrip(".,;:!?")
+
+
 def source_text_has_direct_identity(line: str) -> bool:
     """Return whether rendered text contains concrete provenance without local-note indirection."""
-    if any(valid_http_source_url(match.group(0)) for match in SOURCE_URL_RE.finditer(line)):
+    if any(
+        valid_http_source_url(source_url_candidate(match.group(0)))
+        for match in SOURCE_URL_RE.finditer(line)
+    ):
         return True
     if SOURCE_DOI_RE.search(line):
         return True
