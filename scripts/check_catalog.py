@@ -26,7 +26,10 @@ REFERENCE_RECORD_LINK_RE = re.compile(
 SHORT_REFERENCE_RECORD_LINK_RE = re.compile(
     r"\[(?P<label>(?:\\.|[^\]\\])+)\](?![\[(])"
 )
-ATX_LEVEL_1_OR_2_RE = re.compile(r"^#{1,2}(?:[ \t]|$)")
+ATX_LEVEL_1_OR_2_RE = re.compile(r"^ {0,3}#{1,2}(?:[ \t]|$)")
+ATX_LEVEL_1_OR_2_BODY_RE = re.compile(
+    r"^ {0,3}(?P<hashes>#{1,2})(?:[ \t]+|$)(?P<body>.*)$"
+)
 SETEXT_LEVEL_1_OR_2_RE = re.compile(
     r"^ {0,3}(?P<marker>=+|-+)[ \t]*$"
 )
@@ -816,6 +819,75 @@ def canonicalize_uncontextualized_repository_tokens(text: str) -> str:
     return "".join(out)
 
 
+def _strip_paired_heading_formatting(value: str) -> str:
+    patterns = (
+        re.compile(r"\*\*(?=\S)(.+?\S)\*\*"),
+        re.compile(r"__(?=\S)(.+?\S)__"),
+        re.compile(r"~~(?=\S)(.+?\S)~~"),
+        re.compile(r"\*(?=\S)(.+?\S)\*"),
+        re.compile(r"_(?=\S)(.+?\S)_"),
+        re.compile(r"`([^`]*)`"),
+    )
+    previous = None
+    while value != previous:
+        previous = value
+        for pattern in patterns:
+            value = pattern.sub(lambda match: match.group(1), value)
+    return value
+
+
+def _render_heading_text(value: str, definitions: set[str]) -> str:
+    """Render heading inline syntax for mandatory-section identity."""
+    rendered = _strip_inline_html_constructs(value)
+
+    def replace_full_reference(match: re.Match[str]) -> str:
+        label = match.group("label")
+        reference = match.group("reference") or label
+        if _normalized_reference_label(reference) in definitions:
+            return label
+        return match.group(0)
+
+    rendered = REFERENCE_RECORD_LINK_RE.sub(replace_full_reference, rendered)
+
+    def replace_short_reference(match: re.Match[str]) -> str:
+        label = match.group("label")
+        if _normalized_reference_label(label) in definitions:
+            return label
+        return match.group(0)
+
+    rendered = SHORT_REFERENCE_RECORD_LINK_RE.sub(
+        replace_short_reference, rendered
+    )
+    rendered = re.sub(
+        r"\[(?P<label>[^\]]*)\]\((?:\\.|[^)])*\)",
+        lambda match: match.group("label"),
+        rendered,
+    )
+    rendered = _strip_paired_heading_formatting(rendered)
+    return _commonmark_unescape(rendered).strip()
+
+
+def _setext_heading_source(lines: list[str], underline_index: int) -> str | None:
+    if underline_index <= 0:
+        return None
+    candidate = underline_index - 1
+    if not lines[candidate].rstrip("\r\n").strip():
+        return None
+
+    start = candidate
+    while start > 0:
+        previous = lines[start - 1].rstrip("\r\n")
+        if not previous.strip() or ATX_LEVEL_1_OR_2_RE.match(previous):
+            break
+        start -= 1
+
+    return " ".join(
+        lines[index].rstrip("\r\n").strip()
+        for index in range(start, underline_index)
+        if lines[index].rstrip("\r\n").strip()
+    )
+
+
 def canonicalize_mandatory_section_placeholders(text: str) -> str:
     """Make generic rendered placeholders non-substantive in required record sections."""
     if re.search(r"(?m)^# OPT-[A-Z]+-\d{3} — ", text) is None:
@@ -834,25 +906,33 @@ def canonicalize_mandatory_section_placeholders(text: str) -> str:
         content = raw.rstrip("\r\n")
         ending = raw[len(content) :]
 
-        if content in MANDATORY_SECTION_HEADINGS:
-            active_required_section = True
-            out.append(raw)
-            continue
-        if ATX_LEVEL_1_OR_2_RE.match(content):
-            active_required_section = False
+        atx = ATX_LEVEL_1_OR_2_BODY_RE.match(content)
+        if atx is not None:
+            body = re.sub(
+                r"[ \t]+#+[ \t]*$", "", atx.group("body")
+            )
+            rendered_heading = _render_heading_text(body, definitions)
+            active_required_section = (
+                atx.group("hashes") == "##"
+                and rendered_heading in mandatory_setext_titles
+            )
             out.append(raw)
             continue
 
         setext = SETEXT_LEVEL_1_OR_2_RE.fullmatch(content)
         if setext is not None and index > 0:
-            previous = lines[index - 1].rstrip("\r\n").strip()
-            if previous:
-                active_required_section = (
-                    setext.group("marker").startswith("-")
-                    and previous in mandatory_setext_titles
-                )
-                out.append(raw)
-                continue
+            heading_source = _setext_heading_source(lines, index)
+            rendered_heading = (
+                _render_heading_text(heading_source, definitions)
+                if heading_source is not None
+                else ""
+            )
+            active_required_section = (
+                setext.group("marker").startswith("-")
+                and rendered_heading in mandatory_setext_titles
+            )
+            out.append(raw)
+            continue
 
         if active_required_section:
             rendered = _render_reference_aware_candidate(content.strip(), definitions)
@@ -890,15 +970,16 @@ def canonicalize_reference_record_links(text: str) -> str:
             or _reference_label_has_blank_line(reference)
         ):
             return match.group(0)
-        rendered_label = _render_reference_record_label(label)
-        if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is None:
-            return match.group(0)
         destination = destination_for(label, reference)
         if destination is None:
             return match.group(0)
-        if _record_destination_path(destination) is None:
-            destination = INVALID_REFERENCE_DESTINATION
-        return f"[{label}]({destination})"
+        rendered_label = _render_reference_record_label(label)
+        record_path = _record_destination_path(destination)
+        if record_path is not None:
+            return f"[{label}]({destination})"
+        if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None:
+            return f"[{label}]({INVALID_REFERENCE_DESTINATION})"
+        return match.group(0)
 
     text = REFERENCE_RECORD_LINK_RE.sub(replace_full, text)
 
@@ -910,15 +991,16 @@ def canonicalize_reference_record_links(text: str) -> str:
         label = match.group("label")
         if _reference_label_has_blank_line(label):
             return match.group(0)
-        rendered_label = _render_reference_record_label(label)
-        if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is None:
-            return match.group(0)
         destination = destinations.get(_normalized_reference_label(label))
         if destination is None:
             return match.group(0)
-        if _record_destination_path(destination) is None:
-            destination = INVALID_REFERENCE_DESTINATION
-        return f"[{label}]({destination})"
+        rendered_label = _render_reference_record_label(label)
+        record_path = _record_destination_path(destination)
+        if record_path is not None:
+            return f"[{label}]({destination})"
+        if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None:
+            return f"[{label}]({INVALID_REFERENCE_DESTINATION})"
+        return match.group(0)
 
     text = SHORT_REFERENCE_RECORD_LINK_RE.sub(replace_short, text)
     return normalizer.mask_inline_code_record_destinations(text)
