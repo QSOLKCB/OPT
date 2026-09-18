@@ -400,23 +400,51 @@ def canonicalize_top_level_atx_indentation(text: str) -> str:
     """Deindent only ATX headings that CommonMark renders outside list items."""
     out: list[str] = []
     list_content_indents: list[int] = []
-    previous_blank = False
+    blank_count = 0
+    fence_char: str | None = None
+    fence_len = 0
+    fence_open_re = re.compile(
+        r"^ {0,3}((?:[~]{3,}|[" + chr(96) + r"]{3,}))(.*)$"
+    )
 
     for raw in text.splitlines(keepends=True):
         content = raw.rstrip("\r\n")
         ending = raw[len(content) :]
 
-        if not content.strip():
+        if fence_char is not None:
+            close = re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*", content
+            )
+            if close is not None:
+                fence_char = None
+                fence_len = 0
             out.append(raw)
-            previous_blank = True
             continue
+
+        if not content.strip():
+            blank_count += 1
+            if blank_count >= 2:
+                list_content_indents.clear()
+            out.append(raw)
+            continue
+
+        blank_count = 0
+
+        fence = fence_open_re.match(content)
+        if fence is not None:
+            run = fence.group(1)
+            info = fence.group(2)
+            if run[0] != chr(96) or chr(96) not in info:
+                fence_char = run[0]
+                fence_len = len(run)
+                out.append(raw)
+                continue
 
         leading_spaces = len(content) - len(content.lstrip(" "))
         if THEMATIC_BREAK_RE.fullmatch(content):
             while list_content_indents and leading_spaces < list_content_indents[-1]:
                 list_content_indents.pop()
             out.append(raw)
-            previous_blank = False
             continue
 
         list_layout = _list_item_layout(content)
@@ -432,17 +460,15 @@ def canonicalize_top_level_atx_indentation(text: str) -> str:
                 list_content_indents.append(content_indent)
 
             out.append(raw)
-            previous_blank = False
             continue
 
         block_interrupt = bool(
             ATX_HEADING_RE.match(content)
             or FENCE_LINE_RE.match(content)
-            or THEMATIC_BREAK_RE.fullmatch(content)
             or BLOCKQUOTE_PREFIX_RE.match(content)
             or _standalone_html_tag_name(content) is not None
         )
-        if list_content_indents and (previous_blank or block_interrupt):
+        if list_content_indents and block_interrupt:
             while list_content_indents and leading_spaces < list_content_indents[-1]:
                 list_content_indents.pop()
 
@@ -451,7 +477,6 @@ def canonicalize_top_level_atx_indentation(text: str) -> str:
             content = content[atx_indent.end() :]
 
         out.append(content + ending)
-        previous_blank = False
 
     return "".join(out)
 
@@ -519,7 +544,7 @@ def canonicalize_type7_html_paragraph_interruptions(text: str) -> str:
             continue
 
         if paragraph_open and _is_type7_complete_tag_line(content):
-            out.append("INLINE_HTML_CONTINUATION " + content.lstrip() + ending)
+            out.append("! " + content.lstrip() + ending)
             paragraph_open = True
             continue
 
@@ -529,9 +554,17 @@ def canonicalize_type7_html_paragraph_interruptions(text: str) -> str:
     return "".join(out)
 
 
-def _previous_line_interrupts_setext_paragraph(line: str) -> bool:
+ORDERED_LIST_LINE_RE = re.compile(r"^ {0,3}(?P<number>\d+)[.)][ \t]+")
+
+
+def _line_interrupts_open_paragraph(line: str, paragraph_open: bool) -> bool:
+    if not line.strip():
+        return True
+    ordered = ORDERED_LIST_LINE_RE.match(line)
+    if ordered is not None:
+        return not paragraph_open or ordered.group("number") == "1"
     return bool(
-        LIST_BLOCK_RE.match(line)
+        re.match(r"^ {0,3}[-+*][ \t]+", line)
         or BLOCKQUOTE_PREFIX_RE.match(line)
         or ATX_HEADING_RE.match(line)
         or FENCE_LINE_RE.match(line)
@@ -542,25 +575,33 @@ def _previous_line_interrupts_setext_paragraph(line: str) -> bool:
 
 
 def canonicalize_nonsetext_thematic_breaks(text: str) -> str:
-    """Keep a hyphen thematic break from being mistaken for a Setext underline."""
+    """Rewrite only hyphen lines whose predecessor is truly a block interrupt."""
     out: list[str] = []
-    previous_content: str | None = None
+    paragraph_open = False
+    previous_was_interrupt = False
 
     for raw in text.splitlines(keepends=True):
         content = raw.rstrip("\r\n")
         ending = raw[len(content) :]
         match = SETEXT_H2_LINE_RE.fullmatch(content)
-        if (
-            match is not None
-            and previous_content is not None
-            and _previous_line_interrupts_setext_paragraph(previous_content)
-        ):
+
+        if match is not None and previous_was_interrupt:
             normalized = match.group("indent") + "- - -"
             out.append(normalized + ending)
-            previous_content = normalized
+            paragraph_open = False
+            previous_was_interrupt = True
             continue
+
         out.append(raw)
-        previous_content = content
+
+        if not content.strip():
+            paragraph_open = False
+            previous_was_interrupt = True
+            continue
+
+        interrupted = _line_interrupts_open_paragraph(content, paragraph_open)
+        previous_was_interrupt = interrupted
+        paragraph_open = not interrupted
 
     return "".join(out)
 
