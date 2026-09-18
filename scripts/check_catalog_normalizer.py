@@ -37,7 +37,7 @@ ATX_SUFFIX_RE = re.compile(r"^(?P<indent> {0,3})(?P<hashes>#{1,6})(?=[ \t]|$)")
 FENCE_LINE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
 LIST_BLOCK_RE = re.compile(r"^ {0,3}(?:[-+*]|\d+[.)])[ \t]+")
 LIST_ITEM_RE = re.compile(
-    r"^(?P<indent> *)(?P<marker>[-+*]|\\d+[.)])(?P<spacing>[ \\t]+)"
+    r"^(?P<indent> *)(?P<marker>[-+*]|\d+[.)])(?P<spacing>[ \t]+)"
 )
 THEMATIC_BREAK_RE = re.compile(
     r"^ {0,3}(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
