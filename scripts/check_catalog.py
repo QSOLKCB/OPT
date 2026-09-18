@@ -27,6 +27,9 @@ SHORT_REFERENCE_RECORD_LINK_RE = re.compile(
     r"\[(?P<label>(?:\\.|[^\]\\])+)\](?![\[(])"
 )
 ATX_LEVEL_1_OR_2_RE = re.compile(r"^#{1,2}(?:[ \t]|$)")
+SETEXT_LEVEL_1_OR_2_RE = re.compile(
+    r"^ {0,3}(?P<marker>=+|-+)[ \t]*$"
+)
 GENERIC_SECTION_PLACEHOLDER_RE = re.compile(
     r"^(?:[-*+]\s*)?(?:unknown|tbd|todo|n/?a|none|pending)(?:[.!?])?$",
     re.IGNORECASE,
@@ -819,10 +822,15 @@ def canonicalize_mandatory_section_placeholders(text: str) -> str:
         return text
 
     definitions = _reference_definitions(text)
+    lines = text.splitlines(keepends=True)
+    mandatory_setext_titles = {
+        heading.removeprefix("## ")
+        for heading in MANDATORY_SECTION_HEADINGS
+    }
     out: list[str] = []
     active_required_section = False
 
-    for raw in text.splitlines(keepends=True):
+    for index, raw in enumerate(lines):
         content = raw.rstrip("\r\n")
         ending = raw[len(content) :]
 
@@ -834,6 +842,17 @@ def canonicalize_mandatory_section_placeholders(text: str) -> str:
             active_required_section = False
             out.append(raw)
             continue
+
+        setext = SETEXT_LEVEL_1_OR_2_RE.fullmatch(content)
+        if setext is not None and index > 0:
+            previous = lines[index - 1].rstrip("\r\n").strip()
+            if previous:
+                active_required_section = (
+                    setext.group("marker").startswith("-")
+                    and previous in mandatory_setext_titles
+                )
+                out.append(raw)
+                continue
 
         if active_required_section:
             rendered = _render_reference_aware_candidate(content.strip(), definitions)
