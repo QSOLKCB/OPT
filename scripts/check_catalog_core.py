@@ -1710,7 +1710,10 @@ def preserve_html_image_alt_text(text: str) -> str:
         if alt_match is None:
             return ""
         alt = next(value for value in alt_match.groups() if value is not None)
-        return decode_html_attribute_references(alt)
+        return html.escape(
+            decode_html_attribute_references(alt),
+            quote=False,
+        )
 
     return INLINE_HTML_TAG_RE.sub(replace, text)
 
