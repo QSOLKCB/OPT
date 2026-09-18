@@ -1813,7 +1813,16 @@ def source_text_has_identity(line: str, sources_root: Path) -> bool:
             continue
         if candidate.is_file():
             return True
-    return SOURCE_REPOSITORY_RE.search(line) is not None
+    if SOURCE_REPOSITORY_RE.search(line) is not None:
+        return True
+    return (
+        re.search(
+            r"\brepository\s*:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\b",
+            line,
+            re.IGNORECASE,
+        )
+        is not None
+    )
 
 
 def source_section_has_identity(lines: list[str]) -> bool:
@@ -1863,46 +1872,24 @@ def source_section_has_identity(lines: list[str]) -> bool:
 
 
 def status_category_source(raw: str) -> str:
-    """Return the status category before a real caveat separator."""
-    index = 0
-    code_run_len: int | None = None
-    while index < len(raw):
-        char = raw[index]
+    """Return the rendered status category before its visible caveat separator."""
+    rendered, protected_code = protect_code_spans(raw)
+    rendered = strip_inline_links(rendered)
+    rendered = REFERENCE_IMAGE_RE.sub(lambda match: match.group(1), rendered)
+    rendered = REFERENCE_LINK_RE.sub(lambda match: match.group(1), rendered)
+    rendered = strip_inline_html_constructs(rendered)
+    rendered = strip_paired_inline_formatting(rendered)
+    rendered = commonmark_unescape(rendered)
 
-        if char == "`" and not is_backslash_escaped(raw, index):
-            run_len = backtick_run_length(raw, index)
-            if code_run_len is None:
-                code_run_len = run_len
-            elif run_len == code_run_len:
-                code_run_len = None
-            index += run_len
-            continue
-
-        if code_run_len is not None:
-            index += 1
-            continue
-
-        if char == "\\" and index + 1 < len(raw):
-            index += 2
-            continue
-
-        if char == "&":
-            reference = CHARACTER_REFERENCE_RE.match(raw, index)
-            if reference is not None:
-                if html.unescape(reference.group(0)) == ";":
-                    return raw[:index]
-                index = reference.end()
-                continue
-
-        if char == ";":
-            return raw[:index]
-        index += 1
-    return raw
+    separator = rendered.find(";")
+    category = rendered if separator < 0 else rendered[:separator]
+    for token, code_text in protected_code.items():
+        category = category.replace(token, code_text)
+    return category
 
 
 def normalized_status_category(raw: str) -> str:
-    category = status_category_source(raw).strip()
-    return rendered_inline_text(category).strip()
+    return status_category_source(raw).strip()
 
 
 def require_prefixed_fields(
@@ -2045,7 +2032,7 @@ HTML_NAME_ATTR_RE = re.compile(
 
 def github_heading_slug(value: str) -> str:
     """Approximate GitHub's rendered heading fragment for repository headings."""
-    value = rendered_inline_text(value).strip().casefold()
+    value = rendered_inline_text(value).strip().lower()
     value = re.sub(r"[^\w\- ]+", "", value, flags=re.UNICODE)
     value = re.sub(r"[ \t\r\n]+", "-", value)
     return value
@@ -2099,6 +2086,9 @@ def record_fragment_ids(path: Path) -> set[str]:
         visible_html_parts.append(cleaned)
     visible_html_source = "\n".join(visible_html_parts)
     visible_html_source, _protected_code = protect_code_spans(visible_html_source)
+    visible_html_source, _hidden_tag = strip_nonrendering_html_regions(
+        visible_html_source, None
+    )
 
     for tag in INLINE_HTML_TAG_RE.finditer(visible_html_source):
         source = tag.group(0)
@@ -2223,11 +2213,17 @@ for doc_name in ("README.md", "CATALOG.md"):
 
 catalog = (ROOT / "CATALOG.md").read_text(encoding="utf-8")
 catalog_html_text: list[str] = []
+catalog_visible_lines = visible_nonfenced_lines(
+    markdown_source_lines(catalog),
+    raw_html_text=catalog_html_text,
+)
+hidden_catalog_definitions = reference_definition_hidden_indexes(
+    catalog_visible_lines
+)
 visible_catalog = "\n".join(
-    visible_nonfenced_lines(
-        markdown_source_lines(catalog),
-        raw_html_text=catalog_html_text,
-    )
+    line
+    for index, line in enumerate(catalog_visible_lines)
+    if index not in hidden_catalog_definitions
 )
 visible_catalog = strip_inline_html_constructs(visible_catalog)
 previous_catalog = None
