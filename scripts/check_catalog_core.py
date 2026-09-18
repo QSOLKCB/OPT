@@ -140,6 +140,17 @@ NONRENDERING_HTML_OPEN_RE = re.compile(
     r"<(?P<tag>script|style|template|head|title)(?:[ \t\r\n/>]|$)",
     re.IGNORECASE,
 )
+HTML_HIDDEN_ATTR_RE = re.compile(
+    r"(?:^|[ \t\r\n])hidden"
+    r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\"[^\"]*\"|'[^']*'|[^ \t\r\n\"'=<>\x60]+))?"
+    r"(?=[ \t\r\n/>]|$)",
+    re.IGNORECASE,
+)
+NONRENDERING_HTML_TAGS = {"script", "style", "template", "head", "title"}
+HTML_VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+}
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
 SECTION_BOUNDARY_RE = re.compile(r"^#{1,2}(?:\s|$)")
 SETEXT_H1_RE = re.compile(r"^ {0,3}=+[ \t]*$")
@@ -399,7 +410,7 @@ def strip_nonrendering_html_regions(
     *,
     honor_backslash_escapes: bool,
 ) -> tuple[str, str | None]:
-    """Remove HTML regions whose contents are not visibly rendered."""
+    """Remove parsed HTML regions whose contents are not visibly rendered."""
     out: list[str] = []
     index = 0
 
@@ -423,25 +434,45 @@ def strip_nonrendering_html_regions(
             hidden_tag = None
             continue
 
-        opener = NONRENDERING_HTML_OPEN_RE.search(text, index)
-        if opener is None:
+        tag_start = text.find("<", index)
+        if tag_start < 0:
             out.append(text[index:])
             break
 
-        tag_match = INLINE_HTML_TAG_RE.match(text, opener.start())
-        escaped = (
-            honor_backslash_escapes
-            and is_backslash_escaped(text, opener.start())
-        )
-        if tag_match is None or escaped:
-            advance = tag_match.end() if tag_match is not None else opener.end()
-            out.append(text[index:advance])
-            index = advance
+        tag_match = INLINE_HTML_TAG_RE.match(text, tag_start)
+        if tag_match is None:
+            out.append(text[index : tag_start + 1])
+            index = tag_start + 1
             continue
 
-        out.append(text[index : opener.start()])
-        tag = opener.group("tag").lower()
-        if tag_match.group(0).rstrip().endswith("/>"):
+        source = tag_match.group(0)
+        escaped = (
+            honor_backslash_escapes
+            and is_backslash_escaped(text, tag_start)
+        )
+        if escaped or source.startswith("</"):
+            out.append(text[index : tag_match.end()])
+            index = tag_match.end()
+            continue
+
+        name_match = re.match(r"<(?P<tag>[A-Za-z][A-Za-z0-9-]*)", source)
+        if name_match is None:
+            out.append(text[index : tag_match.end()])
+            index = tag_match.end()
+            continue
+
+        tag = name_match.group("tag").lower()
+        is_hidden = (
+            tag in NONRENDERING_HTML_TAGS
+            or HTML_HIDDEN_ATTR_RE.search(source) is not None
+        )
+        if not is_hidden:
+            out.append(text[index : tag_match.end()])
+            index = tag_match.end()
+            continue
+
+        out.append(text[index:tag_start])
+        if source.rstrip().endswith("/>") or tag in HTML_VOID_TAGS:
             index = tag_match.end()
             continue
 
@@ -781,6 +812,45 @@ def setext_heading_start(
     return start
 
 
+def normalized_setext_heading(
+    lines: list[str], underline_index: int, minimum_index: int = 0
+) -> tuple[int, str] | None:
+    """Return the start index and rendered identity of a Setext heading."""
+    if not (
+        SETEXT_H1_RE.fullmatch(lines[underline_index])
+        or SETEXT_H2_RE.fullmatch(lines[underline_index])
+    ):
+        return None
+    start = setext_heading_start(lines, underline_index, minimum_index)
+    if start is None:
+        return None
+    body = " ".join(
+        part.strip()
+        for part in lines[start:underline_index]
+        if part.strip()
+    )
+    rendered = rendered_inline_text(body).strip()
+    if not rendered:
+        return None
+    hashes = "#" if SETEXT_H1_RE.fullmatch(lines[underline_index]) else "##"
+    return start, f"{hashes} {rendered}"
+
+
+def visible_level12_headings(lines: list[str]) -> list[str]:
+    """Return rendered ATX/Setext level-one and level-two heading identities."""
+    headings: list[str] = []
+    for index, line in enumerate(lines):
+        atx = normalized_visible_heading(line)
+        if atx is not None and (atx.startswith("# ") or atx.startswith("## ")):
+            headings.append(atx)
+            continue
+        setext = normalized_setext_heading(lines, index, 0)
+        if setext is not None:
+            _start, identity = setext
+            headings.append(identity)
+    return headings
+
+
 def normalized_visible_heading(line: str) -> str | None:
     """Return a rendered ATX heading identity while preserving its level."""
     match = re.match(r"^(?P<hashes>#{1,6})(?:[ \t]+|$)(?P<body>.*)$", line)
@@ -814,31 +884,35 @@ def section_lines(
         ),
     )
 
-    target_pos = next(
-        (
-            index
-            for index, (_source_index, line) in enumerate(visible_events)
-            if normalized_visible_heading(line) == heading
-        ),
-        None,
-    )
-    if target_pos is None:
+    visible_values = [line for _source_index, line in visible_events]
+    target_pos: int | None = None
+    start_source: int | None = None
+    for index, (source_index, line) in enumerate(visible_events):
+        if normalized_visible_heading(line) == heading:
+            target_pos = index
+            start_source = source_index
+            break
+        setext = normalized_setext_heading(visible_values, index, 0)
+        if setext is not None and setext[1] == heading:
+            target_pos = index
+            start_source = source_index
+            break
+
+    if target_pos is None or start_source is None:
         return []
 
-    start_source = visible_events[target_pos][0]
     end_source = len(source_lines)
-    visible_values = [line for _source_index, line in visible_events]
 
     for index in range(target_pos + 1, len(visible_events)):
         source_index, line = visible_events[index]
         if SECTION_BOUNDARY_RE.match(line):
             end_source = source_index
             break
-        setext_start = setext_heading_start(
+        setext = normalized_setext_heading(
             visible_values, index, target_pos + 1
         )
-        if setext_start is not None:
-            end_source = visible_events[setext_start][0]
+        if setext is not None:
+            end_source = visible_events[setext[0]][0]
             break
 
     section = [
@@ -878,9 +952,33 @@ def backtick_run_length(text: str, index: int) -> int:
 
 
 def protect_code_spans(text: str) -> tuple[str, dict[str, str]]:
-    """Replace parsed code spans with private-use sentinels and preserve their text."""
+    """Replace parsed code spans with collision-free private-use sentinels."""
     out: list[str] = []
     protected: dict[str, str] = {}
+    private_ranges = (
+        (0xE000, 0xF8FF),
+        (0xF0000, 0xFFFFD),
+        (0x100000, 0x10FFFD),
+    )
+    range_index = 0
+    codepoint = private_ranges[0][0]
+
+    def allocate_token() -> str:
+        nonlocal range_index, codepoint
+        while range_index < len(private_ranges):
+            start, end = private_ranges[range_index]
+            if codepoint < start:
+                codepoint = start
+            while codepoint <= end:
+                token = chr(codepoint)
+                codepoint += 1
+                if token not in text and token not in protected:
+                    return token
+            range_index += 1
+            if range_index < len(private_ranges):
+                codepoint = private_ranges[range_index][0]
+        raise ValueError("no collision-free private-use sentinel available")
+
     i = 0
     while i < len(text):
         if text[i] != "`" or is_backslash_escaped(text, i):
@@ -908,7 +1006,7 @@ def protect_code_spans(text: str) -> tuple[str, dict[str, str]]:
             i += run_len
             continue
 
-        token = chr(0xE000 + len(protected))
+        token = allocate_token()
         protected[token] = text[i + run_len : close_start]
         out.append(token)
         i = close_end
@@ -1979,6 +2077,7 @@ def valid_http_source_url(value: str) -> bool:
     try:
         parsed = urlsplit(value)
         host = parsed.hostname
+        _port = parsed.port
     except ValueError:
         return False
 
@@ -2299,9 +2398,8 @@ for path in sorted(OPT_DIR.glob("*.md")):
 
     heading_counts = Counter(
         rendered
-        for line in lines
-        if (rendered := normalized_visible_heading(line)) is not None
-        and rendered.startswith("## ")
+        for rendered in visible_level12_headings(lines)
+        if rendered.startswith("## ")
     )
     missing = sorted(
         heading for heading in REQUIRED_V2 if heading_counts[heading] == 0
