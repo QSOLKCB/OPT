@@ -837,6 +837,7 @@ def canonicalize_mandatory_section_placeholders(text: str) -> str:
 
         if active_required_section:
             rendered = _render_reference_aware_candidate(content.strip(), definitions)
+            rendered = _strip_inline_html_constructs(rendered).strip()
             if GENERIC_SECTION_PLACEHOLDER_RE.fullmatch(rendered):
                 out.append(ending)
                 continue
