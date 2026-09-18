@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import html
 import ipaddress
+from html.entities import html5 as HTML5_ENTITIES
 import re
 import string
 from collections import Counter
@@ -392,9 +393,12 @@ def _line_keeps_paragraph_open(raw: str, was_open: bool = False) -> bool:
 
 
 def strip_nonrendering_html_regions(
-    text: str, hidden_tag: str | None
+    text: str,
+    hidden_tag: str | None,
+    *,
+    honor_backslash_escapes: bool,
 ) -> tuple[str, str | None]:
-    """Remove parsed, unescaped HTML regions whose contents are not rendered."""
+    """Remove HTML regions whose contents are not visibly rendered."""
     out: list[str] = []
     index = 0
 
@@ -417,7 +421,11 @@ def strip_nonrendering_html_regions(
             break
 
         tag_match = INLINE_HTML_TAG_RE.match(text, opener.start())
-        if tag_match is None or is_backslash_escaped(text, opener.start()):
+        escaped = (
+            honor_backslash_escapes
+            and is_backslash_escaped(text, opener.start())
+        )
+        if tag_match is None or escaped:
             advance = tag_match.end() if tag_match is not None else opener.end()
             out.append(text[index:advance])
             index = advance
@@ -483,7 +491,9 @@ def visible_nonfenced_lines(
             value, raw_html_source_comment
         )
         rendered, raw_html_source_hidden_tag = strip_nonrendering_html_regions(
-            rendered, raw_html_source_hidden_tag
+            rendered,
+            raw_html_source_hidden_tag,
+            honor_backslash_escapes=False,
         )
         if rendered.strip():
             if raw_html_source is not None:
@@ -499,7 +509,9 @@ def visible_nonfenced_lines(
             value, raw_html_comment
         )
         rendered, raw_html_hidden_tag = strip_nonrendering_html_regions(
-            rendered, raw_html_hidden_tag
+            rendered,
+            raw_html_hidden_tag,
+            honor_backslash_escapes=False,
         )
         rendered = strip_inline_html_constructs(rendered)
         if rendered.strip():
@@ -1475,6 +1487,11 @@ def rendered_inline_text(value: str) -> str:
     text = strip_inline_links(text)
     text = REFERENCE_IMAGE_RE.sub(lambda m: m.group(1), text)
     text = REFERENCE_LINK_RE.sub(lambda m: m.group(1), text)
+    text, _hidden_tag = strip_nonrendering_html_regions(
+        text,
+        None,
+        honor_backslash_escapes=True,
+    )
     text = strip_inline_html_constructs(text)
     text = strip_paired_inline_formatting(text)
     text = commonmark_unescape(text)
@@ -1867,11 +1884,16 @@ def source_section_has_identity(lines: list[str]) -> bool:
     ]
     raw_source = "\n".join(rendered_source_lines)
 
-    # Parse complete HTML constructs across line endings before stripping them so
-    # attribute metadata cannot leak into rendered provenance text. Retain only
-    # actual anchor href values as source destinations.
-    html_destinations = html_anchor_hrefs(raw_source)
-    source = strip_inline_html_constructs(raw_source)
+    # Remove non-rendering inline HTML before collecting hrefs, while honoring
+    # Markdown escapes in the visible prose stream. Raw-block source has already
+    # been filtered using raw-HTML (non-escape) semantics.
+    source, _hidden_tag = strip_nonrendering_html_regions(
+        raw_source,
+        None,
+        honor_backslash_escapes=True,
+    )
+    html_destinations = html_anchor_hrefs(source)
+    source = strip_inline_html_constructs(source)
     destinations_inline = inline_link_destinations(source)
     visible_source = strip_inline_links(source)
     rendered_source = commonmark_unescape_outside_code_spans(visible_source)
@@ -1906,7 +1928,11 @@ def status_category_source(raw: str) -> str:
     rendered = strip_inline_links(rendered)
     rendered = REFERENCE_IMAGE_RE.sub(lambda match: match.group(1), rendered)
     rendered = REFERENCE_LINK_RE.sub(lambda match: match.group(1), rendered)
-    rendered, _hidden_tag = strip_nonrendering_html_regions(rendered, None)
+    rendered, _hidden_tag = strip_nonrendering_html_regions(
+        rendered,
+        None,
+        honor_backslash_escapes=True,
+    )
     rendered = strip_inline_html_constructs(rendered)
     rendered = strip_paired_inline_formatting(rendered)
     rendered = commonmark_unescape(rendered)
@@ -2060,6 +2086,93 @@ HTML_NAME_ATTR_RE = re.compile(
 )
 
 
+def decode_html_attribute_references(value: str) -> str:
+    """Decode character references using HTML attribute-value state rules."""
+    out: list[str] = []
+    index = 0
+
+    while index < len(value):
+        if value[index] != "&":
+            out.append(value[index])
+            index += 1
+            continue
+
+        numeric = re.match(r"&#(?:[xX][0-9A-Fa-f]+|[0-9]+);?", value[index:])
+        if numeric is not None:
+            token = numeric.group(0)
+            out.append(html.unescape(token))
+            index += len(token)
+            continue
+
+        run = re.match(r"&(?P<name>[A-Za-z0-9]+)(?P<semi>;?)", value[index:])
+        if run is None:
+            out.append("&")
+            index += 1
+            continue
+
+        name = run.group("name")
+        matched_key: str | None = None
+        matched_len = 0
+        if run.group("semi"):
+            key = name + ";"
+            if key in HTML5_ENTITIES:
+                matched_key = key
+                matched_len = len(name) + 1
+
+        if matched_key is None:
+            for length in range(len(name), 0, -1):
+                key = name[:length]
+                if key in HTML5_ENTITIES:
+                    matched_key = key
+                    matched_len = length
+                    break
+
+        if matched_key is None:
+            out.append("&")
+            index += 1
+            continue
+
+        consumed_end = index + 1 + matched_len
+        if not matched_key.endswith(";"):
+            next_char = value[consumed_end : consumed_end + 1]
+            if next_char and (next_char.isalnum() or next_char == "="):
+                out.append("&")
+                index += 1
+                continue
+
+        out.append(HTML5_ENTITIES[matched_key])
+        index = consumed_end
+
+    return "".join(out)
+
+
+def collect_explicit_html_anchors(
+    text: str, *, honor_backslash_escapes: bool
+) -> set[str]:
+    """Collect explicit id/name fragments from one visible HTML-origin stream."""
+    anchors: set[str] = set()
+    for tag in INLINE_HTML_TAG_RE.finditer(text):
+        if (
+            honor_backslash_escapes
+            and is_backslash_escaped(text, tag.start())
+        ):
+            continue
+
+        source = tag.group(0)
+        if source.startswith("</"):
+            continue
+
+        for match in HTML_ID_ATTR_RE.finditer(source):
+            anchor = next(value for value in match.groups() if value is not None)
+            anchors.add(decode_html_attribute_references(anchor))
+
+        if re.match(r"<a(?:[ \t\r\n]|>)", source, re.IGNORECASE):
+            for match in HTML_NAME_ATTR_RE.finditer(source):
+                anchor = next(value for value in match.groups() if value is not None)
+                anchors.add(decode_html_attribute_references(anchor))
+    return anchors
+
+
 def github_heading_slug(value: str) -> str:
     """Approximate GitHub's rendered heading fragment for repository headings."""
     value = rendered_inline_text(value).strip().lower()
@@ -2109,32 +2222,27 @@ def record_fragment_ids(path: Path) -> set[str]:
                 )
                 allocate_heading_slug(body)
 
-    visible_html_parts: list[str] = []
-    comment_open = False
-    for part in (*visible_lines, *raw_html_source):
-        cleaned, comment_open = strip_inline_html_comments(part, comment_open)
-        visible_html_parts.append(cleaned)
-    visible_html_source = "\n".join(visible_html_parts)
-    visible_html_source, _protected_code = protect_code_spans(visible_html_source)
-    visible_html_source, _hidden_tag = strip_nonrendering_html_regions(
-        visible_html_source, None
+    inline_html_source = "\n".join(visible_lines)
+    inline_html_source, _protected_code = protect_code_spans(inline_html_source)
+    inline_html_source, _hidden_tag = strip_nonrendering_html_regions(
+        inline_html_source,
+        None,
+        honor_backslash_escapes=True,
+    )
+    anchors.update(
+        collect_explicit_html_anchors(
+            inline_html_source,
+            honor_backslash_escapes=True,
+        )
     )
 
-    for tag in INLINE_HTML_TAG_RE.finditer(visible_html_source):
-        if is_backslash_escaped(visible_html_source, tag.start()):
-            continue
-        source = tag.group(0)
-        if source.startswith("</"):
-            continue
-
-        for match in HTML_ID_ATTR_RE.finditer(source):
-            anchor = next(value for value in match.groups() if value is not None)
-            anchors.add(html.unescape(anchor))
-
-        if re.match(r"<a(?:[ \t\r\n]|>)", source, re.IGNORECASE):
-            for match in HTML_NAME_ATTR_RE.finditer(source):
-                anchor = next(value for value in match.groups() if value is not None)
-                anchors.add(html.unescape(anchor))
+    raw_block_html_source = "\n".join(raw_html_source)
+    anchors.update(
+        collect_explicit_html_anchors(
+            raw_block_html_source,
+            honor_backslash_escapes=False,
+        )
+    )
 
     return anchors
 
