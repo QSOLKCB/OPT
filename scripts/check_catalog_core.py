@@ -1886,8 +1886,14 @@ def record_fragment_ids(path: Path) -> set[str]:
     text = path.read_text(encoding="utf-8")
     anchors: set[str] = set()
     slug_counts: Counter[str] = Counter()
+    raw_html_source: list[str] = []
 
-    for line in visible_nonfenced_lines(markdown_source_lines(text)):
+    visible_lines = visible_nonfenced_lines(
+        markdown_source_lines(text),
+        raw_html_source=raw_html_source,
+    )
+
+    for line in visible_lines:
         heading = normalized_visible_heading(line)
         if heading is None:
             continue
@@ -1901,7 +1907,10 @@ def record_fragment_ids(path: Path) -> set[str]:
         slug_counts[slug] += 1
         anchors.add(slug if count == 0 else f"{slug}-{count}")
 
-    for tag in INLINE_HTML_TAG_RE.finditer(text):
+    visible_html_source = "\n".join((*visible_lines, *raw_html_source))
+    visible_html_source, _protected_code = protect_code_spans(visible_html_source)
+
+    for tag in INLINE_HTML_TAG_RE.finditer(visible_html_source):
         source = tag.group(0)
         for match in HTML_ANCHOR_ID_RE.finditer(source):
             anchor = next(value for value in match.groups() if value is not None)
