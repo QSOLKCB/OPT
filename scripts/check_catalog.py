@@ -21,10 +21,10 @@ FULL_REFERENCE_LINK_RE = re.compile(
     r"^\[(?P<label>[^\]]*)\]\[(?P<reference>[^\]]*)\]$"
 )
 REFERENCE_RECORD_LINK_RE = re.compile(
-    r"\[(?P<label>[^\]\r\n]+)\]\[(?P<reference>[^\]]*)\]"
+    r"\[(?P<label>(?:\\.|[^\]\\])+)\]\[(?P<reference>(?:\\.|[^\]\\])*)\]"
 )
 SHORT_REFERENCE_RECORD_LINK_RE = re.compile(
-    r"\[(?P<label>[^\]\r\n]+)\](?![\[(])"
+    r"\[(?P<label>(?:\\.|[^\]\\])+)\](?![\[(])"
 )
 ATX_LEVEL_1_OR_2_RE = re.compile(r"^#{1,2}(?:[ \t]|$)")
 GENERIC_SECTION_PLACEHOLDER_RE = re.compile(
@@ -251,6 +251,18 @@ def _is_indented_code_source(raw: str) -> bool:
     return False
 
 
+def _strip_blockquote_prefix_with_depth(line: str) -> tuple[str, int]:
+    """Strip active blockquote markers and return their nesting depth."""
+    result = line
+    depth = 0
+    while True:
+        match = normalizer.BLOCKQUOTE_PREFIX_RE.match(result)
+        if match is None:
+            return result, depth
+        result = result[match.end() :]
+        depth += 1
+
+
 def _reference_line_interrupts_paragraph(raw: str, paragraph_open: bool) -> bool:
     if _is_indented_code_source(raw):
         return True
@@ -274,12 +286,12 @@ def _reference_definition_source_lines(text: str) -> list[str]:
     fence_char: str | None = None
     fence_len = 0
     fence_list_indent = 0
-    fence_requires_quote = False
+    fence_quote_depth = 0
     active_list_indent: int | None = None
     html_mode: str | None = None
     html_end: str | None = None
     html_list_indent = 0
-    html_requires_quote = False
+    html_quote_depth = 0
 
     def boundary() -> None:
         if not lines or lines[-1] != "":
@@ -314,14 +326,15 @@ def _reference_definition_source_lines(text: str) -> list[str]:
 
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     for raw in normalized.split("\n"):
-        unquoted, quoted = normalizer._strip_blockquote_prefix(raw)
+        unquoted, quote_depth = _strip_blockquote_prefix_with_depth(raw)
+        quoted = quote_depth > 0
 
         if fence_char is not None:
-            if fence_requires_quote and not quoted:
+            if fence_quote_depth > 0 and quote_depth < fence_quote_depth:
                 fence_char = None
                 fence_len = 0
                 fence_list_indent = 0
-                fence_requires_quote = False
+                fence_quote_depth = 0
                 boundary()
             else:
                 fence_view = unquoted if quoted else raw
@@ -330,7 +343,7 @@ def _reference_definition_source_lines(text: str) -> list[str]:
                         fence_char = None
                         fence_len = 0
                         fence_list_indent = 0
-                        fence_requires_quote = False
+                        fence_quote_depth = 0
                         boundary()
                     else:
                         fence_view = _strip_indent_columns(fence_view, fence_list_indent)
@@ -343,7 +356,7 @@ def _reference_definition_source_lines(text: str) -> list[str]:
                         fence_char = None
                         fence_len = 0
                         fence_list_indent = 0
-                        fence_requires_quote = False
+                        fence_quote_depth = 0
                     continue
 
         view = unquoted if quoted else raw
@@ -360,11 +373,11 @@ def _reference_definition_source_lines(text: str) -> list[str]:
                 active_list_indent = None
 
         if html_mode is not None:
-            if html_requires_quote and not quoted:
+            if html_quote_depth > 0 and quote_depth < html_quote_depth:
                 html_mode = None
                 html_end = None
                 html_list_indent = 0
-                html_requires_quote = False
+                html_quote_depth = 0
                 boundary()
             else:
                 html_view = view
@@ -373,7 +386,7 @@ def _reference_definition_source_lines(text: str) -> list[str]:
                         html_mode = None
                         html_end = None
                         html_list_indent = 0
-                        html_requires_quote = False
+                        html_quote_depth = 0
                         boundary()
                     else:
                         html_view = _strip_indent_columns(html_view, html_list_indent)
@@ -385,21 +398,21 @@ def _reference_definition_source_lines(text: str) -> list[str]:
                             html_mode = None
                             html_end = None
                             html_list_indent = 0
-                            html_requires_quote = False
+                            html_quote_depth = 0
                         continue
                     if html_mode == "token":
                         if html_end is not None and html_end in html_view:
                             html_mode = None
                             html_end = None
                             html_list_indent = 0
-                            html_requires_quote = False
+                            html_quote_depth = 0
                         continue
                     if html_mode == "blank":
                         if not html_view.strip():
                             html_mode = None
                             html_end = None
                             html_list_indent = 0
-                            html_requires_quote = False
+                            html_quote_depth = 0
                             boundary()
                         continue
 
@@ -412,7 +425,7 @@ def _reference_definition_source_lines(text: str) -> list[str]:
                 fence_char = run[0]
                 fence_len = len(run)
                 fence_list_indent = current_list_indent or 0
-                fence_requires_quote = quoted
+                fence_quote_depth = quote_depth
                 continue
 
         started = html_start(view)
@@ -420,19 +433,19 @@ def _reference_definition_source_lines(text: str) -> list[str]:
             boundary()
             html_mode, html_end = started
             html_list_indent = current_list_indent or 0
-            html_requires_quote = quoted
+            html_quote_depth = quote_depth
             if html_mode == "tag" and html_end is not None and re.search(
                 rf"</{re.escape(html_end)}>", view, re.IGNORECASE
             ):
                 html_mode = None
                 html_end = None
                 html_list_indent = 0
-                html_requires_quote = False
+                html_quote_depth = 0
             elif html_mode == "token" and html_end is not None and html_end in view:
                 html_mode = None
                 html_end = None
                 html_list_indent = 0
-                html_requires_quote = False
+                html_quote_depth = 0
             continue
 
         lines.append(raw)
@@ -833,6 +846,10 @@ def canonicalize_mandatory_section_placeholders(text: str) -> str:
     return "".join(out)
 
 
+def _reference_label_has_blank_line(value: str) -> bool:
+    return re.search(r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)", value) is not None
+
+
 def canonicalize_reference_record_links(text: str) -> str:
     """Resolve reference-style OPT links so the core validates their destinations."""
     destinations = _reference_destinations(text)
@@ -847,10 +864,16 @@ def canonicalize_reference_record_links(text: str) -> str:
         if _is_backslash_escaped(match.string, match.start()):
             return match.group(0)
         label = match.group("label")
+        reference = match.group("reference")
+        if (
+            _reference_label_has_blank_line(label)
+            or _reference_label_has_blank_line(reference)
+        ):
+            return match.group(0)
         rendered_label = _render_reference_record_label(label)
         if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is None:
             return match.group(0)
-        destination = destination_for(label, match.group("reference"))
+        destination = destination_for(label, reference)
         if destination is None:
             return match.group(0)
         if _record_destination_path(destination) is None:
@@ -865,6 +888,8 @@ def canonicalize_reference_record_links(text: str) -> str:
         if _is_backslash_escaped(match.string, match.start()):
             return match.group(0)
         label = match.group("label")
+        if _reference_label_has_blank_line(label):
+            return match.group(0)
         rendered_label = _render_reference_record_label(label)
         if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is None:
             return match.group(0)
