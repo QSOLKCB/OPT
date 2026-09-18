@@ -106,7 +106,23 @@ SOURCE_COMMIT_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 SOURCE_LOCAL_NOTE_RE = re.compile(r"`?(sources/[A-Za-z0-9._/-]+\.md)`?")
-SOURCE_REPOSITORY_RE = re.compile(r"`[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+`")
+SOURCE_REPOSITORY_RE = re.compile(
+    r"`(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)`"
+)
+SOURCE_REPOSITORY_CONTEXT_RE = re.compile(
+    r"\brepository\s*:\s*"
+    r"(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)\b",
+    re.IGNORECASE,
+)
+SOURCE_REPOSITORY_PLACEHOLDERS = {
+    "n/a",
+    "na",
+    "none",
+    "unknown",
+    "tbd",
+    "todo",
+    "pending",
+}
 SOURCE_PLACEHOLDER_RE = re.compile(
     r"^(?:[-*+]\s*)?(?:unknown|tbd|todo|n/?a|none|pending)\.?$", re.IGNORECASE
 )
@@ -378,14 +394,14 @@ def _line_keeps_paragraph_open(raw: str, was_open: bool = False) -> bool:
 def strip_nonrendering_html_regions(
     text: str, hidden_tag: str | None
 ) -> tuple[str, str | None]:
-    """Remove nested HTML regions whose contents are not visibly rendered."""
+    """Remove parsed, unescaped HTML regions whose contents are not rendered."""
     out: list[str] = []
     index = 0
 
     while index < len(text):
         if hidden_tag is not None:
             close = re.search(
-                rf"</{re.escape(hidden_tag)}[ \\t\\r\\n]*>",
+                rf"</{re.escape(hidden_tag)}[ \t\r\n]*>",
                 text[index:],
                 re.IGNORECASE,
             )
@@ -400,15 +416,21 @@ def strip_nonrendering_html_regions(
             out.append(text[index:])
             break
 
+        tag_match = INLINE_HTML_TAG_RE.match(text, opener.start())
+        if tag_match is None or is_backslash_escaped(text, opener.start()):
+            advance = tag_match.end() if tag_match is not None else opener.end()
+            out.append(text[index:advance])
+            index = advance
+            continue
+
         out.append(text[index : opener.start()])
         tag = opener.group("tag").lower()
-        tag_match = INLINE_HTML_TAG_RE.match(text, opener.start())
-        if tag_match is not None and tag_match.group(0).rstrip().endswith("/>"):
+        if tag_match.group(0).rstrip().endswith("/>"):
             index = tag_match.end()
             continue
 
         hidden_tag = tag
-        index = tag_match.end() if tag_match is not None else opener.end()
+        index = tag_match.end()
 
     return "".join(out), hidden_tag
 
@@ -1795,6 +1817,14 @@ def valid_http_source_url(value: str) -> bool:
     )
 
 
+def valid_repository_identity(owner: str, repo: str) -> bool:
+    token = f"{owner}/{repo}".lower()
+    if token in SOURCE_REPOSITORY_PLACEHOLDERS:
+        return False
+    placeholder_parts = {"none", "unknown", "tbd", "todo", "pending"}
+    return owner.lower() not in placeholder_parts and repo.lower() not in placeholder_parts
+
+
 def source_text_has_identity(line: str, sources_root: Path) -> bool:
     if any(valid_http_source_url(match.group(0)) for match in SOURCE_URL_RE.finditer(line)):
         return True
@@ -1813,15 +1843,14 @@ def source_text_has_identity(line: str, sources_root: Path) -> bool:
             continue
         if candidate.is_file():
             return True
-    if SOURCE_REPOSITORY_RE.search(line) is not None:
+    if any(
+        valid_repository_identity(match.group("owner"), match.group("repo"))
+        for match in SOURCE_REPOSITORY_RE.finditer(line)
+    ):
         return True
-    return (
-        re.search(
-            r"\brepository\s*:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\b",
-            line,
-            re.IGNORECASE,
-        )
-        is not None
+    return any(
+        valid_repository_identity(match.group("owner"), match.group("repo"))
+        for match in SOURCE_REPOSITORY_CONTEXT_RE.finditer(line)
     )
 
 
@@ -1877,6 +1906,7 @@ def status_category_source(raw: str) -> str:
     rendered = strip_inline_links(rendered)
     rendered = REFERENCE_IMAGE_RE.sub(lambda match: match.group(1), rendered)
     rendered = REFERENCE_LINK_RE.sub(lambda match: match.group(1), rendered)
+    rendered, _hidden_tag = strip_nonrendering_html_regions(rendered, None)
     rendered = strip_inline_html_constructs(rendered)
     rendered = strip_paired_inline_formatting(rendered)
     rendered = commonmark_unescape(rendered)
