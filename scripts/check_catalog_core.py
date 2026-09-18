@@ -158,8 +158,28 @@ def markdown_source_lines(text: str) -> list[str]:
 
 
 def is_indented_code_line(raw: str) -> bool:
-    """Return whether a non-fenced line is an indented Markdown code line."""
-    return raw.startswith("\t") or raw.startswith("    ")
+    """Return whether leading whitespace reaches four CommonMark columns."""
+    columns = 0
+    for char in raw:
+        if char == " ":
+            columns += 1
+        elif char == "\t":
+            columns += 4 - (columns % 4)
+        else:
+            break
+        if columns >= 4:
+            return True
+    return False
+
+
+def strip_blockquote_prefixes(raw: str) -> str:
+    """Strip active block-quote markers for block-level parsing only."""
+    result = raw
+    while True:
+        match = re.match(r"^ {0,3}>[ \t]?", result)
+        if match is None:
+            return result
+        result = result[match.end() :]
 
 
 def strip_inline_html_comments(raw: str, in_comment: bool) -> tuple[str, bool]:
@@ -239,11 +259,18 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
     html_end: str | None = None
     paragraph_open = False
 
+    def boundary() -> None:
+        if not visible or visible[-1] != "":
+            visible.append("")
+
     for raw in lines:
+        block_raw = strip_blockquote_prefixes(raw)
+
         if fence_char is not None:
             paragraph_open = False
             close = re.fullmatch(
-                rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*", raw
+                rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*",
+                block_raw,
             )
             if close is not None:
                 fence_char = None
@@ -253,20 +280,20 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
         if html_mode is not None:
             paragraph_open = False
             if html_mode == "tag":
-                if html_end is not None and raw_html_tag_closes(raw, html_end):
+                if html_end is not None and raw_html_tag_closes(block_raw, html_end):
                     html_mode = None
                     html_end = None
                 continue
             if html_mode == "token":
-                if html_end is not None and html_end in raw:
+                if html_end is not None and html_end in block_raw:
                     html_mode = None
                     html_end = None
                 continue
             if html_mode == "blank":
-                if raw.strip() == "":
+                if block_raw.strip() == "":
                     html_mode = None
                     html_end = None
-                    visible.append("")
+                    boundary()
                 continue
 
         was_paragraph_open = paragraph_open
@@ -277,48 +304,61 @@ def visible_nonfenced_lines(lines: list[str]) -> list[str]:
                 continue
             raw_for_parse = rendered
         else:
-            if is_indented_code_line(raw):
+            if is_indented_code_line(block_raw):
                 if not paragraph_open:
                     continue
                 raw_for_parse = raw
             else:
-                opener = FENCE_OPEN_RE.match(raw)
+                opener = FENCE_OPEN_RE.match(block_raw)
                 if opener is not None:
                     run = opener.group(1)
                     info = opener.group(2)
-                    if run[0] != "`" or "`" not in info:
+                    if run[0] != chr(96) or chr(96) not in info:
                         paragraph_open = False
                         fence_char = run[0]
                         fence_len = len(run)
-                        if not visible or visible[-1] != "":
-                            visible.append("")
+                        boundary()
                         continue
 
-                html_start = raw_html_block_start(raw)
+                html_start = raw_html_block_start(block_raw)
                 if html_start is not None:
                     paragraph_open = False
+                    boundary()
                     html_mode, html_end = html_start
-                    if html_mode == "tag" and html_end is not None and raw_html_tag_closes(raw, html_end):
+                    if (
+                        html_mode == "tag"
+                        and html_end is not None
+                        and raw_html_tag_closes(block_raw, html_end)
+                    ):
                         html_mode = None
                         html_end = None
-                    elif html_mode == "token" and html_end is not None and html_end in raw:
+                    elif (
+                        html_mode == "token"
+                        and html_end is not None
+                        and html_end in block_raw
+                    ):
                         html_mode = None
                         html_end = None
                     continue
 
                 raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
 
-        if raw_for_parse and is_indented_code_line(raw_for_parse) and not was_paragraph_open:
+        parse_view = strip_blockquote_prefixes(raw_for_parse)
+        if (
+            raw_for_parse
+            and is_indented_code_line(parse_view)
+            and not was_paragraph_open
+        ):
             continue
 
         if raw_for_parse:
             visible.append(raw_for_parse)
-            if is_indented_code_line(raw_for_parse) and was_paragraph_open:
+            if is_indented_code_line(parse_view) and was_paragraph_open:
                 paragraph_open = True
             else:
-                paragraph_open = _line_keeps_paragraph_open(raw_for_parse)
+                paragraph_open = _line_keeps_paragraph_open(parse_view)
         elif not inline_comment and raw == "":
-            visible.append("")
+            boundary()
             paragraph_open = False
 
     return visible
