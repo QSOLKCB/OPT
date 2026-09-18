@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 import string
 
@@ -20,10 +21,10 @@ FULL_REFERENCE_LINK_RE = re.compile(
     r"^\[(?P<label>[^\]]*)\]\[(?P<reference>[^\]]*)\]$"
 )
 REFERENCE_RECORD_LINK_RE = re.compile(
-    r"\[(?P<label>OPT-[A-Z]+-\d{3})\]\[(?P<reference>[^\]]*)\]"
+    r"\[(?P<label>[^\]\r\n]+)\]\[(?P<reference>[^\]]*)\]"
 )
 SHORT_REFERENCE_RECORD_LINK_RE = re.compile(
-    r"\[(?P<label>OPT-[A-Z]+-\d{3})\](?![\[(])"
+    r"\[(?P<label>[^\]\r\n]+)\](?![\[(])"
 )
 ATX_LEVEL_1_OR_2_RE = re.compile(r"^#{1,2}(?:[ \t]|$)")
 GENERIC_SECTION_PLACEHOLDER_RE = re.compile(
@@ -80,7 +81,21 @@ def _commonmark_unescape(value: str) -> str:
 
 def _normalized_reference_label(label: str) -> str:
     """Apply CommonMark reference-label normalization."""
-    return " ".join(_commonmark_unescape(label).split()).casefold()
+    rendered = html.unescape(_commonmark_unescape(label))
+    return " ".join(rendered.split()).casefold()
+
+
+def _leading_columns(value: str) -> int:
+    """Return CommonMark-style leading indentation columns."""
+    columns = 0
+    for char in value:
+        if char == " ":
+            columns += 1
+        elif char == "\t":
+            columns += 4 - (columns % 4)
+        else:
+            break
+    return columns
 
 
 def _is_backslash_escaped(text: str, index: int) -> bool:
@@ -331,6 +346,10 @@ def _reference_entries(text: str) -> list[tuple[str, str]]:
             continue
 
         label = match.group("label")
+        if len(label) > 999:
+            paragraph_open = True
+            index += 1
+            continue
         rest = match.group("rest")
         consumed = 1
 
@@ -363,7 +382,9 @@ def _reference_entries(text: str) -> list[tuple[str, str]]:
             ):
                 consumed += 1
 
-        entries.append((label, _commonmark_unescape(destination)))
+        entries.append(
+            (label, html.unescape(_commonmark_unescape(destination)))
+        )
         paragraph_open = False
         index += consumed
 
@@ -537,7 +558,7 @@ def canonicalize_uncontextualized_repository_tokens(text: str) -> str:
             continue
 
         repository_blank_count = 0
-        leading = len(content) - len(content.lstrip(" "))
+        leading = _leading_columns(content)
         has_repository_context = REPOSITORY_CONTEXT_RE.search(content) is not None
         continuation_has_context = (
             repository_continuation_indent is not None
@@ -609,7 +630,12 @@ def canonicalize_reference_record_links(text: str) -> str:
     def replace_full(match: re.Match[str]) -> str:
         if _reference_match_is_image(match):
             return match.group(0)
+        if _is_backslash_escaped(match.string, match.start()):
+            return match.group(0)
         label = match.group("label")
+        rendered_label = normalizer._render_placeholder_candidate(label)
+        if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is None:
+            return match.group(0)
         destination = destination_for(label, match.group("reference"))
         if destination is None:
             return match.group(0)
@@ -622,7 +648,12 @@ def canonicalize_reference_record_links(text: str) -> str:
     def replace_short(match: re.Match[str]) -> str:
         if _reference_match_is_image(match):
             return match.group(0)
+        if _is_backslash_escaped(match.string, match.start()):
+            return match.group(0)
         label = match.group("label")
+        rendered_label = normalizer._render_placeholder_candidate(label)
+        if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is None:
+            return match.group(0)
         destination = destinations.get(_normalized_reference_label(label))
         if destination is None:
             return match.group(0)
