@@ -44,7 +44,7 @@ THEMATIC_BREAK_RE = re.compile(
 )
 SETEXT_H2_LINE_RE = re.compile(r"^(?P<indent> {0,3})-{3,}[ \t]*$")
 RECORD_LINK_START_RE = re.compile(
-    r"\[([^\]\r\n]+)\]\([ \t\r\n]*(optimizations/[^\s)#]+\.md(?:#[^\s)]*)?)"
+    r"\[([^\]\r\n]+)\]\((?:[ \t]*\r?\n[ \t]*|[ \t]*)(optimizations/[^\s)#]+\.md(?:#[^\s)]*)?)"
 )
 ANGLE_RECORD_DEST_RE = re.compile(
     r"(?P<prefix>\[[^\]\r\n]+\]\()<(?P<dest>optimizations/[^\s<>#]+\.md(?:#[^\s<>]*)?)>"
@@ -125,6 +125,30 @@ HTML_BLOCK_TAGS = {
     "thead", "title", "tr", "track", "ul",
 }
 TYPE1_HTML_TAGS = {"script", "pre", "style", "textarea"}
+
+
+def _skip_link_whitespace(text: str, index: int) -> int | None:
+    """Skip spaces/tabs and at most one line ending."""
+    i = index
+    saw_newline = False
+    while i < len(text):
+        if text[i] in " \t":
+            i += 1
+            continue
+        if text.startswith("\r\n", i):
+            if saw_newline:
+                return None
+            saw_newline = True
+            i += 2
+            continue
+        if text[i] in "\r\n":
+            if saw_newline:
+                return None
+            saw_newline = True
+            i += 1
+            continue
+        break
+    return i
 
 
 def _skip_whitespace(text: str, index: int) -> int:
@@ -318,13 +342,20 @@ def canonicalize_record_link_titles(text: str) -> str:
             search_from = after_destination
             continue
 
-        title_start = _skip_whitespace(text, after_destination)
+        title_start = _skip_link_whitespace(text, after_destination)
+        if title_start is None:
+            search_from = after_destination
+            continue
         title_end = _parse_title(text, title_start)
         if title_end is None:
             search_from = after_destination
             continue
-        outer_close = _skip_whitespace(text, title_end)
-        if outer_close >= len(text) or text[outer_close] != ")":
+        outer_close = _skip_link_whitespace(text, title_end)
+        if (
+            outer_close is None
+            or outer_close >= len(text)
+            or text[outer_close] != ")"
+        ):
             search_from = after_destination
             continue
 
@@ -459,6 +490,17 @@ def canonicalize_top_level_atx_indentation(text: str) -> str:
         list_layout = _list_item_layout(content)
         if list_layout is not None:
             marker_indent, content_indent = list_layout
+            list_match = LIST_ITEM_RE.match(content)
+            item_content = (
+                content[list_match.end() :] if list_match is not None else ""
+            )
+            item_fence = fence_open_re.match(item_content)
+            if item_fence is not None:
+                run = item_fence.group(1)
+                info = item_fence.group(2)
+                if run[0] != chr(96) or chr(96) not in info:
+                    fence_char = run[0]
+                    fence_len = len(run)
             while list_content_indents and marker_indent < list_content_indents[-1]:
                 list_content_indents.pop()
 
@@ -491,12 +533,18 @@ def canonicalize_top_level_atx_indentation(text: str) -> str:
 
 
 def canonicalize_nested_reference_definitions(text: str) -> str:
-    """Expose quoted reference definitions, including split destinations."""
+    """Expose rendered reference definitions inside quote/list containers."""
     out: list[str] = []
     paragraph_open = False
     reference_title_expected = False
     reference_destination_expected = False
-
+    active_list_indent: int | None = None
+    fence_char: str | None = None
+    fence_len = 0
+    fence_requires_quote = False
+    fence_open_re = re.compile(
+        r"^ {0,3}((?:[~]{3,}|[" + chr(96) + r"]{3,}))(.*)$"
+    )
     definition_prefix_re = re.compile(
         r"^\[(?:\\.|[^\[\]\\])+\]:[ \t]*(?P<rest>.*)$"
     )
@@ -504,39 +552,98 @@ def canonicalize_nested_reference_definitions(text: str) -> str:
     for raw in text.splitlines(keepends=True):
         content = raw.rstrip("\r\n")
         ending = raw[len(content) :]
-        unquoted, changed = _strip_blockquote_prefix(content)
+        unquoted, quoted = _strip_blockquote_prefix(content)
 
-        if not changed:
+        if fence_char is not None:
+            if fence_requires_quote and not quoted:
+                fence_char = None
+                fence_len = 0
+                fence_requires_quote = False
+            else:
+                fence_view = unquoted if quoted else content
+                if active_list_indent is not None and not quoted:
+                    leading = len(content) - len(content.lstrip(" "))
+                    if leading >= active_list_indent:
+                        fence_view = content[active_list_indent:]
+                close = re.fullmatch(
+                    rf" {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*",
+                    fence_view,
+                )
+                if close is not None:
+                    fence_char = None
+                    fence_len = 0
+                    fence_requires_quote = False
+                out.append(raw)
+                continue
+
+        view = unquoted
+        exposed = quoted
+        list_marker = LIST_ITEM_RE.match(view)
+        if list_marker is not None:
+            layout = _list_item_layout(view)
+            if layout is not None:
+                _marker_indent, active_list_indent = layout
+            view = view[list_marker.end() :]
+            exposed = True
+        elif active_list_indent is not None and not quoted:
+            leading = len(content) - len(content.lstrip(" "))
+            if content.strip() and leading >= active_list_indent:
+                view = content[active_list_indent:]
+                exposed = True
+            elif content.strip():
+                active_list_indent = None
+
+        fence = fence_open_re.match(view)
+        if exposed and fence is not None:
+            run = fence.group(1)
+            info = fence.group(2)
+            if run[0] != chr(96) or chr(96) not in info:
+                fence_char = run[0]
+                fence_len = len(run)
+                fence_requires_quote = quoted
+                reference_title_expected = False
+                reference_destination_expected = False
+                paragraph_open = False
+                out.append(raw)
+                continue
+
+        if not exposed:
             paragraph_open = False
             reference_title_expected = False
             reference_destination_expected = False
             out.append(raw)
             continue
 
-        stripped = unquoted.strip()
-        if not stripped:
+        if not view.strip():
             paragraph_open = False
             reference_title_expected = False
             reference_destination_expected = False
             out.append(raw)
             continue
+
+        normalized_view = view
+        if active_list_indent is not None and list_marker is None and not quoted:
+            normalized_view = " " + view.lstrip(" ")
 
         if reference_destination_expected:
-            if re.match(r"^ {1,3}\S", unquoted):
-                out.append(unquoted + ending)
+            if re.match(r"^ {1,3}\S", normalized_view):
+                out.append(normalized_view + ending)
                 reference_destination_expected = False
                 reference_title_expected = True
                 paragraph_open = False
                 continue
             reference_destination_expected = False
 
-        if reference_title_expected and LINK_REFERENCE_TITLE_CONTINUATION_RE.fullmatch(unquoted):
-            out.append(unquoted + ending)
+        if (
+            reference_title_expected
+            and LINK_REFERENCE_TITLE_CONTINUATION_RE.fullmatch(normalized_view)
+        ):
+            out.append(normalized_view + ending)
             reference_title_expected = False
             paragraph_open = False
             continue
 
-        definition = definition_prefix_re.fullmatch(unquoted)
+        definition = definition_prefix_re.fullmatch(normalized_view)
         if definition is not None:
             if paragraph_open:
                 out.append(raw)
@@ -544,7 +651,7 @@ def canonicalize_nested_reference_definitions(text: str) -> str:
                 reference_destination_expected = False
                 paragraph_open = True
             else:
-                out.append(unquoted + ending)
+                out.append(normalized_view + ending)
                 rest = definition.group("rest")
                 reference_destination_expected = not bool(rest)
                 reference_title_expected = bool(rest)
@@ -554,7 +661,7 @@ def canonicalize_nested_reference_definitions(text: str) -> str:
         out.append(raw)
         reference_title_expected = False
         reference_destination_expected = False
-        paragraph_open = _line_can_open_or_continue_paragraph(unquoted)
+        paragraph_open = _line_can_open_or_continue_paragraph(normalized_view)
 
     return "".join(out)
 
