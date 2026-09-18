@@ -34,9 +34,9 @@ ATX_INDENT_RE = re.compile(r"(?m)^ {1,3}(?=#{1,6}(?:[ \t]|$))")
 ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 ATX_SUFFIX_RE = re.compile(r"^(?P<indent> {0,3})(?P<hashes>#{1,6})(?=[ \t]|$)")
 FENCE_LINE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
-LIST_BLOCK_RE = re.compile(r"^ {0,3}(?:[-+*]|\d+[.)])[ \t]+")
+LIST_BLOCK_RE = re.compile(r"^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+")
 LIST_ITEM_RE = re.compile(
-    r"^(?P<indent> *)(?P<marker>[-+*]|\d+[.)])(?P<spacing>[ \t]+)"
+    r"^(?P<indent> *)(?P<marker>[-+*]|\d{1,9}[.)])(?P<spacing>[ \t]+)"
 )
 THEMATIC_BREAK_RE = re.compile(
     r"^ {0,3}(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,}|_(?:[ \t]*_){2,})[ \t]*$"
@@ -565,9 +565,9 @@ def canonicalize_nested_reference_definitions(text: str) -> str:
             return "tag", type1.group("tag").lower()
         if re.match(r"^ {0,3}<\?", view):
             return "token", "?>"
-        if re.match(r"^ {0,3}<!\[CDATA\[", view, re.IGNORECASE):
+        if re.match(r"^ {0,3}<!\[CDATA\[", view):
             return "token", "]]>"
-        if re.match(r"^ {0,3}<![A-Z]", view, re.IGNORECASE):
+        if re.match(r"^ {0,3}<![A-Z]", view):
             return "token", ">"
         block_tag = re.match(
             r"^ {0,3}</?(?P<tag>[A-Za-z][A-Za-z0-9-]*)(?:[ \t\n/>]|$)",
