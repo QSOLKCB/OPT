@@ -149,13 +149,13 @@ RAW_HTML_COMPLETE_TAG_RE = re.compile(
 EMPHASIS_WRAPPERS = ("**", "__", "~~", "*", "_")
 STATUS_WRAPPERS = ("**", "__", "~~", "*", "_", "`")
 CANONICAL_DEFINITION_PATTERNS = {
-    "X": re.compile(r"^- `X` — \S"),
-    "F": re.compile(r"^- `F(?: ⊆ X)?` — \S"),
-    "f": re.compile(r"^- `f(?:\s*:[^`]*)?` — \S"),
-    "d": re.compile(r"^- `d` — \S"),
-    "C": re.compile(r"^- `C` — \S"),
-    "B": re.compile(r"^- `B` — \S"),
-    "S": re.compile(r"^- `S` — \S"),
+    "X": re.compile(r"^- `X` — (?P<body>.*)$"),
+    "F": re.compile(r"^- `F(?: ⊆ X)?` — (?P<body>.*)$"),
+    "f": re.compile(r"^- `f(?:\s*:[^`]*)?` — (?P<body>.*)$"),
+    "d": re.compile(r"^- `d` — (?P<body>.*)$"),
+    "C": re.compile(r"^- `C` — (?P<body>.*)$"),
+    "B": re.compile(r"^- `B` — (?P<body>.*)$"),
+    "S": re.compile(r"^- `S` — (?P<body>.*)$"),
 }
 
 
@@ -376,6 +376,8 @@ def visible_nonfenced_lines(
     lines: list[str],
     raw_html_text: list[str] | None = None,
     raw_html_source: list[str] | None = None,
+    visible_events: list[tuple[int, str]] | None = None,
+    raw_html_events: list[tuple[int, str]] | None = None,
 ) -> list[str]:
     """Return Markdown-visible lines used by schema validation.
 
@@ -394,13 +396,33 @@ def visible_nonfenced_lines(
     html_end: str | None = None
     html_quote_depth = 0
     html_list_indent = 0
+    raw_html_comment = False
     paragraph_open = False
 
-    def boundary() -> None:
-        if not visible or visible[-1] != "":
-            visible.append("")
+    def append_visible(source_index: int, value: str) -> None:
+        visible.append(value)
+        if visible_events is not None:
+            visible_events.append((source_index, value))
 
-    for raw in lines:
+    def boundary(source_index: int) -> None:
+        if not visible or visible[-1] != "":
+            append_visible(source_index, "")
+
+    def append_raw_html_text(source_index: int, value: str) -> None:
+        nonlocal raw_html_comment
+        if raw_html_text is None and raw_html_events is None:
+            return
+        rendered, raw_html_comment = strip_inline_html_comments(
+            value, raw_html_comment
+        )
+        rendered = strip_inline_html_constructs(rendered)
+        if rendered.strip():
+            if raw_html_text is not None:
+                raw_html_text.append(rendered)
+            if raw_html_events is not None:
+                raw_html_events.append((source_index, rendered))
+
+    for source_index, raw in enumerate(lines):
         quote_depth, block_raw = blockquote_depth_and_content(raw)
 
         if fence_char is not None:
@@ -415,7 +437,7 @@ def visible_nonfenced_lines(
                 fence_len = 0
                 fence_quote_depth = 0
                 fence_list_indent = 0
-                boundary()
+                boundary(source_index)
             else:
                 paragraph_open = False
                 fence_view = (
@@ -446,7 +468,8 @@ def visible_nonfenced_lines(
                 html_end = None
                 html_quote_depth = 0
                 html_list_indent = 0
-                boundary()
+                raw_html_comment = False
+                boundary(source_index)
             else:
                 paragraph_open = False
                 html_view = (
@@ -465,9 +488,7 @@ def visible_nonfenced_lines(
                     and html_mode == "tag"
                     and html_end in {"pre", "textarea"}
                 ):
-                    rendered_html = strip_inline_html_constructs(html_view)
-                    if rendered_html.strip():
-                        raw_html_text.append(rendered_html)
+                    append_raw_html_text(source_index, html_view)
 
                 if html_mode == "tag":
                     if html_end is not None and raw_html_tag_closes(html_view, html_end):
@@ -475,6 +496,7 @@ def visible_nonfenced_lines(
                         html_end = None
                         html_quote_depth = 0
                         html_list_indent = 0
+                        raw_html_comment = False
                     continue
                 if html_mode == "token":
                     if html_end is not None and html_end in html_view:
@@ -482,20 +504,20 @@ def visible_nonfenced_lines(
                         html_end = None
                         html_quote_depth = 0
                         html_list_indent = 0
+                        raw_html_comment = False
                     continue
                 if html_mode == "blank":
                     if raw_html_source is not None and html_view.strip():
                         raw_html_source.append(html_view)
                     if raw_html_text is not None:
-                        rendered_html = strip_inline_html_constructs(html_view)
-                        if rendered_html.strip():
-                            raw_html_text.append(rendered_html)
+                        append_raw_html_text(source_index, html_view)
                     if html_view.strip() == "":
                         html_mode = None
                         html_end = None
                         html_quote_depth = 0
                         html_list_indent = 0
-                        boundary()
+                        raw_html_comment = False
+                        boundary(source_index)
                     continue
 
         was_paragraph_open = paragraph_open
@@ -537,13 +559,13 @@ def visible_nonfenced_lines(
                         fence_len = len(run)
                         fence_quote_depth = quote_depth
                         fence_list_indent = current_list_indent or 0
-                        boundary()
+                        boundary(source_index)
                         continue
 
                 html_start = raw_html_block_start(block_view)
                 if html_start is not None:
                     paragraph_open = False
-                    boundary()
+                    boundary(source_index)
                     html_mode, html_end = html_start
                     html_quote_depth = quote_depth
                     html_list_indent = current_list_indent or 0
@@ -556,9 +578,7 @@ def visible_nonfenced_lines(
                         html_mode == "blank"
                         or (html_mode == "tag" and html_end in {"pre", "textarea"})
                     ):
-                        rendered_html = strip_inline_html_constructs(block_view)
-                        if rendered_html.strip():
-                            raw_html_text.append(rendered_html)
+                        append_raw_html_text(source_index, block_view)
                     if (
                         html_mode == "tag"
                         and html_end is not None
@@ -577,6 +597,7 @@ def visible_nonfenced_lines(
                         html_end = None
                         html_quote_depth = 0
                         html_list_indent = 0
+                        raw_html_comment = False
                     continue
 
                 raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
@@ -594,7 +615,7 @@ def visible_nonfenced_lines(
             continue
 
         if raw_for_parse:
-            visible.append(raw_for_parse)
+            append_visible(source_index, raw_for_parse)
             if is_indented_code_line(parse_view) and was_paragraph_open:
                 paragraph_open = True
             else:
@@ -602,7 +623,7 @@ def visible_nonfenced_lines(
                     parse_view, was_paragraph_open
                 )
         elif not inline_comment and raw == "":
-            boundary()
+            boundary(source_index)
             paragraph_open = False
 
     return visible
@@ -651,29 +672,58 @@ def normalized_visible_heading(line: str) -> str | None:
     return f"{match.group('hashes')} {rendered}" if rendered else match.group("hashes")
 
 
-def section_lines(text: str, heading: str) -> list[str]:
+def section_lines(
+    text: str, heading: str, *, include_raw_html_text: bool = False
+) -> list[str]:
     """Return one exact rendered level-2 Markdown section."""
-    lines = visible_nonfenced_lines(markdown_source_lines(text))
-    start = next(
+    source_lines = markdown_source_lines(text)
+    visible_events: list[tuple[int, str]] = []
+    raw_html_events: list[tuple[int, str]] = []
+    visible_nonfenced_lines(
+        source_lines,
+        visible_events=visible_events,
+        raw_html_events=raw_html_events if include_raw_html_text else None,
+    )
+
+    target_pos = next(
         (
-            index + 1
-            for index, line in enumerate(lines)
+            index
+            for index, (_source_index, line) in enumerate(visible_events)
             if normalized_visible_heading(line) == heading
         ),
         None,
     )
-    if start is None:
+    if target_pos is None:
         return []
-    end = len(lines)
-    for i in range(start, len(lines)):
-        if SECTION_BOUNDARY_RE.match(lines[i]):
-            end = i
+
+    start_source = visible_events[target_pos][0]
+    end_source = len(source_lines)
+    visible_values = [line for _source_index, line in visible_events]
+
+    for index in range(target_pos + 1, len(visible_events)):
+        source_index, line = visible_events[index]
+        if SECTION_BOUNDARY_RE.match(line):
+            end_source = source_index
             break
-        setext_start = setext_heading_start(lines, i, start)
+        setext_start = setext_heading_start(
+            visible_values, index, target_pos + 1
+        )
         if setext_start is not None:
-            end = setext_start
+            end_source = visible_events[setext_start][0]
             break
-    return lines[start:end]
+
+    section = [
+        line
+        for source_index, line in visible_events
+        if start_source < source_index < end_source
+    ]
+    if include_raw_html_text:
+        section.extend(
+            rendered
+            for source_index, rendered in raw_html_events
+            if start_source < source_index < end_source
+        )
+    return section
 
 
 def is_backslash_escaped(text: str, index: int) -> bool:
