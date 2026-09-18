@@ -2374,14 +2374,15 @@ def valid_repository_identity(owner: str, repo: str) -> bool:
     return True
 
 
-def source_url_candidate(value: str) -> str:
-    """Trim terminal prose punctuation and unmatched closing wrappers."""
-    result = value.rstrip(".,;:!?")
+def source_url_candidate(line: str, match: re.Match[str]) -> str:
+    """Trim prose punctuation and wrappers without stripping balanced URL syntax."""
+    result = match.group(0).rstrip(".,;:!?")
+    opening_quote = line[match.start() - 1] if match.start() > 0 else ""
     closing_pairs = {")": "(", "]": "[", "}": "{"}
 
     while result:
         closer = result[-1]
-        if closer in {'"', "'"}:
+        if closer in {'"', "'"} and opening_quote == closer:
             result = result[:-1].rstrip(".,;:!?")
             continue
 
@@ -2398,7 +2399,7 @@ def source_url_candidate(value: str) -> str:
 def source_text_has_direct_identity(line: str) -> bool:
     """Return whether rendered text contains concrete provenance without local-note indirection."""
     if any(
-        valid_http_source_url(source_url_candidate(match.group(0)))
+        valid_http_source_url(source_url_candidate(line, match))
         for match in SOURCE_URL_RE.finditer(line)
     ):
         return True
