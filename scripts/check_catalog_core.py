@@ -1062,6 +1062,15 @@ def backtick_run_length(text: str, index: int) -> int:
     return cursor - index
 
 
+def inline_paragraph_limit(text: str, start: int) -> int:
+    """Return the first blank-line boundary after start, or len(text)."""
+    boundary = re.search(
+        r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)",
+        text[start:],
+    )
+    return len(text) if boundary is None else start + boundary.start()
+
+
 def protect_code_spans(text: str) -> tuple[str, dict[str, str]]:
     """Replace parsed code spans with collision-free private-use sentinels."""
     out: list[str] = []
@@ -1106,9 +1115,10 @@ def protect_code_spans(text: str) -> tuple[str, dict[str, str]]:
 
         run_len = backtick_run_length(text, i)
         j = i + run_len
+        paragraph_end = inline_paragraph_limit(text, j)
         close_start: int | None = None
         close_end: int | None = None
-        while j < len(text):
+        while j < paragraph_end:
             if text[j] != "`":
                 j += 1
                 continue
@@ -1135,7 +1145,8 @@ def protect_code_spans(text: str) -> tuple[str, dict[str, str]]:
 def find_label_close(text: str, open_index: int) -> int | None:
     depth = 1
     i = open_index + 1
-    while i < len(text):
+    paragraph_end = inline_paragraph_limit(text, i)
+    while i < paragraph_end:
         if text[i] == "\\" and i + 1 < len(text):
             i += 2
             continue
@@ -1439,9 +1450,13 @@ def visible_record_links(
             i += 1
             continue
 
+        raw_label = text[i + 1 : label_close]
+        if inline_link_destination_pairs(raw_label):
+            i += 1
+            continue
+
         decoded_destination = commonmark_unescape(destination)
         rel, _separator, _fragment = decoded_destination.partition("#")
-        raw_label = text[i + 1 : label_close]
         rendered_label = rendered_record_label(raw_label, protected_code)
         if (
             rel.startswith("optimizations/")
