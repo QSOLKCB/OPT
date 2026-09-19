@@ -1313,7 +1313,7 @@ def markdown_inputs(root: Path) -> list[Path]:
         root / "CATALOG.md",
         root / "OPTIMIZATION-PROBLEM.md",
     ]
-    paths.extend(sorted((root / "optimizations").glob("*.md")))
+    paths.extend(sorted((root / "optimizations").rglob("OPT-*.md")))
     return [path for path in paths if path.is_file()]
 
 
