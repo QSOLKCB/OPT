@@ -446,8 +446,8 @@ def strip_nonrendering_html_regions(
                 index = tag_match.end()
                 continue
 
-            if re.fullmatch(
-                rf"</{re.escape(hidden_tag)}[ \t\r\n]*>",
+            if re.match(
+                rf"</{re.escape(hidden_tag)}(?:[ \t\r\n/>]|$)",
                 source,
                 re.IGNORECASE,
             ):
@@ -1730,6 +1730,14 @@ def html_anchor_label_extent(
     return len(text), len(text)
 
 
+ASCII_URL_EDGE_CHARS = "".join(chr(value) for value in range(0x21))
+
+
+def decoded_html_url_attribute(value: str) -> str:
+    """Decode an HTML URL attribute and trim leading/trailing C0 controls/space."""
+    return decode_html_attribute_references(value).strip(ASCII_URL_EDGE_CHARS)
+
+
 def html_anchor_links(text: str) -> list[tuple[str, str]]:
     """Return rendered anchor labels paired with decoded href destinations."""
     links: list[tuple[str, str]] = []
@@ -1760,7 +1768,7 @@ def html_anchor_links(text: str) -> list[tuple[str, str]]:
         label_end, next_index = extent
 
         label = rendered_inline_text(text[tag.end():label_end])
-        links.append((label, decode_html_attribute_references(href)))
+        links.append((label, decoded_html_url_attribute(href)))
         index = next_index
 
     return links
@@ -1825,7 +1833,7 @@ def visible_html_record_links(
             continue
         label_end, next_index = extent
 
-        decoded_href = decode_html_attribute_references(href)
+        decoded_href = decoded_html_url_attribute(href)
         rel, _separator, _fragment = decoded_href.partition("#")
         normalized_rel = normalize_repository_relative_path(rel)
         label_source = text[tag.end():label_end]
@@ -2336,13 +2344,11 @@ def used_reference_links(text: str) -> list[tuple[str, str]]:
         if protected_text[i] != "[" or is_backslash_escaped(protected_text, i):
             i += 1
             continue
-        if (
+        is_image = (
             i > 0
             and protected_text[i - 1] == "!"
             and not is_backslash_escaped(protected_text, i - 1)
-        ):
-            i += 1
-            continue
+        )
 
         label_close = find_label_close(protected_text, i)
         if label_close is None:
@@ -2354,6 +2360,19 @@ def used_reference_links(text: str) -> list[tuple[str, str]]:
             rendered_inline_text(label_source), protected_code
         )
         after = label_close + 1
+
+        if is_image:
+            if after < len(protected_text) and protected_text[after] == "(":
+                link_end = find_inline_link_end(protected_text, after)
+                i = link_end if link_end is not None else label_close + 1
+                continue
+            if after < len(protected_text) and protected_text[after] == "[":
+                reference_close = find_label_close(protected_text, after)
+                if reference_close is not None:
+                    i = reference_close + 1
+                    continue
+            i = label_close + 1
+            continue
 
         if after < len(protected_text) and protected_text[after] == "(":
             link_end = find_inline_link_end(protected_text, after)
