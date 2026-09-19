@@ -200,10 +200,12 @@ HTML_SCOPE_BOUNDARIES = {
     "object", "template",
 }
 HTML_RAW_TEXT_ELEMENTS = {
-    "script", "style", "title", "iframe", "textarea", "xmp", "plaintext",
+    "script", "style", "title", "iframe", "textarea", "xmp", "noframes",
+    "plaintext",
 }
 HTML_EOF_TEXT_ELEMENTS = {"plaintext"}
 SVG_HTML_INTEGRATION_POINTS = {"foreignobject", "desc", "title"}
+MATHML_TEXT_INTEGRATION_POINTS = {"mi", "mo", "mn", "ms", "mtext"}
 HTML_SELECT_HANDLED_START_TAGS = {
     "option", "optgroup", "hr", "select", "input", "keygen", "textarea",
     "script", "template",
@@ -213,7 +215,11 @@ HTML_SELECT_HANDLED_END_TAGS = {"option", "optgroup", "select", "template"}
 
 def html_start_tag_name(source: str) -> str | None:
     match = re.match(r"<(?P<tag>[A-Za-z][A-Za-z0-9-]*)", source)
-    return match.group("tag").lower() if match is not None else None
+    if match is None:
+        return None
+    tag = match.group("tag").lower()
+    # HTML's in-body parser treats the legacy <image> start tag as <img>.
+    return "img" if tag == "image" else tag
 
 
 def html_start_implicitly_closes(open_tag: str, source: str) -> bool:
@@ -346,6 +352,13 @@ class HTMLVisibilityState:
             if foreign and tag in SVG_HTML_INTEGRATION_POINTS:
                 foreign = False
                 continue
+            if (
+                foreign
+                and tag in MATHML_TEXT_INTEGRATION_POINTS
+                and new_tag not in {"mglyph", "malignmark"}
+            ):
+                foreign = False
+                continue
             if not foreign and tag in {"svg", "math"}:
                 foreign = True
         return new_tag in {"svg", "math"} or foreign
@@ -354,6 +367,17 @@ class HTMLVisibilityState:
         new_tag = html_start_tag_name(source)
         if new_tag is None:
             return
+
+        # A heading start while the current node is another heading pops the
+        # current heading before the new one is inserted.
+        heading_tags = {"h1", "h2", "h3", "h4", "h5", "h6"}
+        if (
+            new_tag in heading_tags
+            and self.elements
+            and self.elements[-1][0] in heading_tags
+        ):
+            self.elements.pop()
+            self._refresh_foster_parenting()
 
         # Nested buttons and anchors trigger HTML recovery before the new
         # element is inserted. This can expose a sibling that was previously
@@ -398,6 +422,31 @@ class HTMLVisibilityState:
         for index in range(len(self.elements) - 1, -1, -1):
             current_tag = self.elements[index][0]
             if current_tag == tag:
+                if tag == "form" and index < len(self.elements) - 1:
+                    # HTML's form end-tag algorithm removes a non-current form
+                    # from the open-element stack without popping its current
+                    # descendants. Preserve the removed form's own hidden
+                    # ancestry on the first retained descendant.
+                    _form_tag, form_hidden = self.elements[index]
+                    if form_hidden:
+                        child_tag, child_hidden = self.elements[index + 1]
+                        self.elements[index + 1] = (
+                            child_tag,
+                            child_hidden or form_hidden,
+                        )
+                    del self.elements[index]
+                    if (
+                        self.foster_table_index is not None
+                        and index < self.foster_table_index
+                    ):
+                        self.foster_table_index -= 1
+                    if (
+                        self.foster_start_index is not None
+                        and index < self.foster_start_index
+                    ):
+                        self.foster_start_index -= 1
+                    self._refresh_foster_parenting()
+                    return
                 del self.elements[index:]
                 self._refresh_foster_parenting()
                 return
@@ -720,6 +769,12 @@ def strip_nonrendering_html_regions(
             if not state.hidden:
                 out.append(source)
             continue
+        if state.in_select_mode and tag in {"input", "keygen", "textarea", "select"}:
+            state.close("select")
+            # A nested select start closes the active select but is not
+            # reprocessed as a new select element.
+            if tag == "select":
+                continue
         if state.start_is_ignored(source):
             continue
         state.close_for_start(source)
@@ -1369,13 +1424,50 @@ def backtick_run_length(text: str, index: int) -> int:
     return cursor - index
 
 
+def line_interrupts_inline_paragraph(raw: str) -> bool:
+    """Return whether a CommonMark block start interrupts an open paragraph."""
+    if not raw.strip(" \t"):
+        return True
+    if is_indented_code_line(raw):
+        return False
+    if re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", raw):
+        return True
+    if THEMATIC_BREAK_RE.fullmatch(raw.strip()):
+        return True
+    if re.match(r"^ {0,3}>", raw):
+        return True
+    if re.match(r"^ {0,3}[-+*][ \t]+\S", raw):
+        return True
+    ordered = re.match(r"^ {0,3}(?P<number>\d{1,9})[.)][ \t]+\S", raw)
+    if ordered is not None and int(ordered.group("number")) == 1:
+        return True
+    if FENCE_OPEN_RE.match(raw):
+        return True
+    if (
+        re.match(r"^ {0,3}<!--", raw)
+        or RAW_HTML_TYPE1_OPEN_RE.match(raw)
+        or re.match(r"^ {0,3}<\?", raw)
+        or re.match(r"^ {0,3}<!\[CDATA\[", raw)
+        or RAW_HTML_DECLARATION_OPEN_RE.match(raw)
+        or RAW_HTML_BLOCK_TAG_RE.match(raw)
+    ):
+        return True
+    return False
+
+
 def inline_paragraph_limit(text: str, start: int) -> int:
-    """Return the first blank-line boundary after start, or len(text)."""
-    boundary = re.search(
-        r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)",
-        text[start:],
-    )
-    return len(text) if boundary is None else start + boundary.start()
+    """Bound inline parsing at blank lines or paragraph-interrupting blocks."""
+    for ending in re.finditer(r"\r\n|\r|\n", text[start:]):
+        following = start + ending.end()
+        next_ending = re.search(r"\r\n|\r|\n", text[following:])
+        next_end = (
+            len(text)
+            if next_ending is None
+            else following + next_ending.start()
+        )
+        if line_interrupts_inline_paragraph(text[following:next_end]):
+            return start + ending.start()
+    return len(text)
 
 
 def protect_code_spans(text: str) -> tuple[str, dict[str, str]]:
