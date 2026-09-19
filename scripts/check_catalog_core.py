@@ -2414,6 +2414,8 @@ def visible_html_record_links(
             continue
 
         href = first_html_attribute_value(tag_source, "href")
+        if href is None and html_namespace_at_offset(text, start) == "svg":
+            href = first_html_attribute_value(tag_source, "xlink:href")
         if href is None:
             index = tag.end()
             continue
