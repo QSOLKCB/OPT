@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import html
+import posixpath
 import re
 import string
 
@@ -645,12 +646,45 @@ def _reference_destinations(text: str) -> dict[str, str]:
     return destinations
 
 
+URI_UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
+PERCENT_ESCAPE_RE = re.compile(r"%([0-9A-Fa-f]{2})")
+
+
+def _decode_safe_record_path_escapes(path: str) -> str | None:
+    """Decode URI-unreserved escapes while rejecting encoded separators/traversal."""
+    if re.search(r"%(?:2[fF]|5[cC])", path):
+        return None
+
+    decoded_segments: list[str] = []
+    for segment in path.split("/"):
+        def replace_escape(match: re.Match[str]) -> str:
+            char = chr(int(match.group(1), 16))
+            return char if char in URI_UNRESERVED else match.group(0)
+
+        decoded = PERCENT_ESCAPE_RE.sub(replace_escape, segment)
+        if decoded in {".", ".."} and decoded != segment:
+            return None
+        decoded_segments.append(decoded)
+
+    return "/".join(decoded_segments)
+
+
 def _record_destination_path(destination: str) -> str | None:
-    """Return a record path while allowing an optional URL fragment."""
+    """Return one normalized repository record path with an optional fragment."""
     path, _separator, _fragment = destination.partition("#")
-    if path.startswith("optimizations/") and path.endswith(".md"):
-        return path
-    return None
+    decoded = _decode_safe_record_path_escapes(path)
+    if decoded is None or not decoded or decoded.startswith("/"):
+        return None
+
+    normalized = posixpath.normpath(decoded)
+    if (
+        normalized in {"", ".", ".."}
+        or normalized.startswith("../")
+        or not normalized.startswith("optimizations/")
+        or not normalized.endswith(".md")
+    ):
+        return None
+    return normalized
 
 
 def _render_reference_aware_candidate(value: str, definitions: set[str]) -> str:
