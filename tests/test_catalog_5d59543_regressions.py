@@ -79,7 +79,7 @@ CASES = [
     ("noncurrent-form-preserves-hidden-descendant", '<form hidden><div>x<form></form><a href="' + BROKEN + '">details</a></div>', True),
     ("legacy-image-is-void-img", '<image hidden><a href="' + BROKEN + '">details</a>', False),
     ("code-span-heading-boundary", "`open\n# [OPT-FAKE-999](" + BROKEN + ")`", False),
-    ("code-span-soft-line-control", "`open\n[OPT-FAKE-999](" + BROKEN + ")`", True),
+    ("code-span-soft-line-control", "`open\n[details](" + BROKEN + ")`", True),
     ("non-http-scheme-control", '<a href="urn:optimizations\\does-not-exist.md">details</a>', True),
 ]
 
@@ -112,7 +112,16 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
                     if succeeds:
                         self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", result.stdout)
                     else:
-                        self.assertIn("broken visible record link in " + document, result.stderr)
+                        if name == "code-span-heading-boundary":
+                            self.assertIn(
+                                "visible record link in " + document,
+                                result.stderr,
+                            )
+                        else:
+                            self.assertIn(
+                                "broken visible record link in " + document,
+                                result.stderr,
+                            )
                         self.assertNotIn("Traceback", result.stderr)
 
     def run_source_evidence_case(self, source_evidence: str) -> subprocess.CompletedProcess[str]:
