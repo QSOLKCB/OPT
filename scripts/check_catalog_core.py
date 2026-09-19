@@ -239,16 +239,18 @@ def html_start_implicitly_closes(open_tag: str, source: str) -> bool:
 
 
 class HTMLVisibilityState:
-    """Keep element ancestry across chunks, including visible scope boundaries.
+    """Track browser HTML ancestry and namespaces across Markdown block boundaries."""
 
-    A parent close removes only its own subtree. In particular, an inner ul/ol
-    cannot close an outer hidden li, and closing a p cannot remove a hidden div.
-    """
+    TABLE_ONLY_START_TAGS = {
+        "caption", "col", "colgroup", "tbody", "td", "tfoot", "th", "thead", "tr",
+    }
 
     def __init__(self) -> None:
-        self.elements: list[tuple[str, bool]] = []
+        # (local tag name, effective hidden ancestry, namespace)
+        self.elements: list[tuple[str, bool, str]] = []
         self.foster_table_index: int | None = None
         self.foster_start_index: int | None = None
+        self.form_pointer_active = False
 
     @property
     def hidden(self) -> bool:
@@ -259,19 +261,60 @@ class HTMLVisibilityState:
             return (
                 any(
                     hidden
-                    for _tag, hidden in self.elements[:self.foster_table_index]
+                    for _tag, hidden, _namespace
+                    in self.elements[:self.foster_table_index]
                 )
                 or any(
                     hidden
-                    for _tag, hidden in self.elements[self.foster_start_index:]
+                    for _tag, hidden, _namespace
+                    in self.elements[self.foster_start_index:]
                 )
             )
-        return any(hidden for _tag, hidden in self.elements)
+        return any(hidden for _tag, hidden, _namespace in self.elements)
+
+    @property
+    def current_namespace(self) -> str:
+        return self.elements[-1][2] if self.elements else "html"
+
+    @property
+    def in_foreign_content(self) -> bool:
+        return self.current_namespace in {"svg", "math"}
+
+    def namespace_for_start(self, new_tag: str) -> str:
+        """Return the namespace used for a start tag at the current node."""
+        if new_tag == "svg":
+            return "svg"
+        if new_tag == "math":
+            return "math"
+        if not self.elements:
+            return "html"
+
+        current_tag, _hidden, current_namespace = self.elements[-1]
+        if (
+            current_namespace == "svg"
+            and current_tag in SVG_HTML_INTEGRATION_POINTS
+        ):
+            return "html"
+        if (
+            current_namespace == "math"
+            and current_tag in MATHML_TEXT_INTEGRATION_POINTS
+            and new_tag not in {"mglyph", "malignmark"}
+        ):
+            return "html"
+        return current_namespace
+
+    def has_html_table_context(self) -> bool:
+        return any(
+            tag == "table" and namespace == "html"
+            for tag, _hidden, namespace in self.elements
+        )
 
     def table_foster_parent_index(self) -> int | None:
-        """Return the table whose in-table mode would foster-parent this token."""
+        """Return the HTML table whose in-table mode would foster-parent this token."""
         for index in range(len(self.elements) - 1, -1, -1):
-            tag, _hidden = self.elements[index]
+            tag, _hidden, namespace = self.elements[index]
+            if namespace != "html":
+                continue
             if tag in {"template", "td", "th", "caption"}:
                 return None
             if tag == "table":
@@ -296,9 +339,6 @@ class HTMLVisibilityState:
         table_index = self.table_foster_parent_index()
         if table_index is None:
             return
-        # Preserve the earliest foster-parented element for this table. Nested
-        # foster-parented descendants belong beneath that already relocated
-        # ancestor; moving the boundary forward would lose its hidden state.
         if (
             self.foster_table_index == table_index
             and self.foster_start_index is not None
@@ -317,8 +357,9 @@ class HTMLVisibilityState:
 
     @property
     def in_select_mode(self) -> bool:
-        """Return whether the current token is parsed by HTML's select mode."""
-        for tag, _hidden in reversed(self.elements):
+        for tag, _hidden, namespace in reversed(self.elements):
+            if namespace != "html":
+                continue
             if tag == "template":
                 return False
             if tag == "select":
@@ -326,69 +367,44 @@ class HTMLVisibilityState:
         return False
 
     def start_is_ignored(self, source: str) -> bool:
-        """Model start tags that the relevant HTML insertion modes ignore."""
+        """Model start tags ignored by the relevant HTML insertion modes."""
         new_tag = html_start_tag_name(source)
         if new_tag is None:
             return False
 
-        # The form element pointer prevents a nested form start from creating
-        # another element. Its following </form> still closes the active form.
-        if new_tag == "form" and any(
-            tag == "form" for tag, _hidden in self.elements
+        if new_tag == "form" and self.form_pointer_active:
+            return True
+
+        if (
+            new_tag in self.TABLE_ONLY_START_TAGS
+            and not self.has_html_table_context()
         ):
             return True
 
-        # In select mode, arbitrary markup such as <a> is a parse error and is
-        # ignored. Its character data remains rendered text.
         return (
             self.in_select_mode
             and new_tag not in HTML_SELECT_HANDLED_START_TAGS
         )
 
     def end_is_ignored(self, tag: str) -> bool:
-        """Return whether select insertion mode ignores this end tag."""
         return (
             self.in_select_mode
             and tag not in HTML_SELECT_HANDLED_END_TAGS
         )
 
     def start_tag_is_foreign(self, new_tag: str) -> bool:
-        """Return whether a start tag is parsed in a foreign namespace."""
-        foreign = False
-        for tag, _hidden in self.elements:
-            if foreign and tag in SVG_HTML_INTEGRATION_POINTS:
-                foreign = False
-                continue
-            if (
-                foreign
-                and tag in MATHML_TEXT_INTEGRATION_POINTS
-                and new_tag not in {"mglyph", "malignmark"}
-            ):
-                foreign = False
-                continue
-            if not foreign and tag in {"svg", "math"}:
-                foreign = True
-        return new_tag in {"svg", "math"} or foreign
+        return self.namespace_for_start(new_tag) in {"svg", "math"}
 
     def current_foreign_root_index(self) -> int | None:
-        """Return the active foreign-content root, respecting integration points."""
-        foreign = False
-        root: int | None = None
-        for index, (tag, _hidden) in enumerate(self.elements):
-            if foreign and (
-                tag in SVG_HTML_INTEGRATION_POINTS
-                or tag in MATHML_TEXT_INTEGRATION_POINTS
-            ):
-                foreign = False
-                root = None
-                continue
-            if not foreign and tag in {"svg", "math"}:
-                foreign = True
-                root = index
-        return root if foreign else None
+        """Return the root of the active contiguous foreign-namespace ancestry."""
+        if not self.in_foreign_content:
+            return None
+        index = len(self.elements) - 1
+        while index > 0 and self.elements[index - 1][2] != "html":
+            index -= 1
+        return index
 
     def break_out_of_foreign_content(self, source: str) -> None:
-        """Apply HTML foreign-content breakout recovery before reprocessing a start."""
         new_tag = html_start_tag_name(source)
         if new_tag is None:
             return
@@ -411,38 +427,40 @@ class HTMLVisibilityState:
         if new_tag is None:
             return
 
-        # A heading start while the current node is another heading pops the
-        # current heading before the new one is inserted.
         heading_tags = {"h1", "h2", "h3", "h4", "h5", "h6"}
         if (
             new_tag in heading_tags
             and self.elements
             and self.elements[-1][0] in heading_tags
+            and self.elements[-1][2] == "html"
         ):
             self.elements.pop()
             self._refresh_foster_parenting()
 
-        # Nested buttons and anchors trigger HTML recovery before the new
-        # element is inserted. This can expose a sibling that was previously
-        # beneath a hidden ancestor.
-        if new_tag in {"button", "a"}:
+        if new_tag in {"button", "a", "nobr"}:
             for index in range(len(self.elements) - 1, -1, -1):
-                tag, _hidden = self.elements[index]
-                if tag == new_tag:
+                tag, _hidden, namespace = self.elements[index]
+                if namespace == "html" and tag == new_tag:
                     del self.elements[index:]
                     self._refresh_foster_parenting()
                     break
-                if tag in HTML_SCOPE_BOUNDARIES:
+                if namespace == "html" and tag in HTML_SCOPE_BOUNDARIES:
                     break
 
-        # More than one optional element can close, e.g. p inside an old li.
         while True:
             changed = False
             for index in range(len(self.elements) - 1, -1, -1):
-                tag, _hidden = self.elements[index]
+                tag, _hidden, namespace = self.elements[index]
+                if namespace != "html":
+                    continue
                 if not html_start_implicitly_closes(tag, source):
                     continue
-                above = {name for name, _ in self.elements[index + 1 :]}
+                above = {
+                    name
+                    for name, _hidden, above_namespace
+                    in self.elements[index + 1:]
+                    if above_namespace == "html"
+                }
                 boundaries = set(HTML_SCOPE_BOUNDARIES)
                 if tag == "p":
                     boundaries.add("button")
@@ -461,52 +479,60 @@ class HTMLVisibilityState:
             if not changed:
                 return
 
+    def process_generated_block_start(self, tag: str) -> None:
+        """Apply browser start-tag recovery for a Markdown-generated block."""
+        source = f"<{tag}>"
+        self.break_out_of_foreign_content(source)
+        self.close_for_start(source)
+        if self.start_is_foster_parented(source):
+            self.begin_foster_parenting()
+
     def close(self, tag: str) -> None:
         if tag == "table":
-            # In cell/row modes, </table> closes the active cell/table context
-            # and is then reprocessed. Do not let td/th stop the table close.
             for index in range(len(self.elements) - 1, -1, -1):
-                current_tag = self.elements[index][0]
-                if current_tag == "table":
+                current_tag, _hidden, namespace = self.elements[index]
+                if namespace == "html" and current_tag == "table":
                     del self.elements[index:]
                     self._refresh_foster_parenting()
                     return
-                if current_tag in {"html", "template"}:
+                if namespace == "html" and current_tag in {"html", "template"}:
                     return
 
         for index in range(len(self.elements) - 1, -1, -1):
-            current_tag = self.elements[index][0]
-            if current_tag == tag:
-                if tag == "form" and index < len(self.elements) - 1:
-                    # HTML's form end-tag algorithm removes a non-current form
-                    # from the open-element stack without popping its current
-                    # descendants. Preserve the removed form's own hidden
-                    # ancestry on the first retained descendant.
-                    _form_tag, form_hidden = self.elements[index]
-                    if form_hidden:
-                        child_tag, child_hidden = self.elements[index + 1]
-                        self.elements[index + 1] = (
-                            child_tag,
-                            child_hidden or form_hidden,
-                        )
-                    del self.elements[index]
-                    if (
-                        self.foster_table_index is not None
-                        and index < self.foster_table_index
-                    ):
-                        self.foster_table_index -= 1
-                    if (
-                        self.foster_start_index is not None
-                        and index < self.foster_start_index
-                    ):
-                        self.foster_start_index -= 1
-                    self._refresh_foster_parenting()
-                    return
+            current_tag, _hidden, namespace = self.elements[index]
+            if namespace == "html" and current_tag == tag:
+                if tag == "form":
+                    self.form_pointer_active = False
+                    if index < len(self.elements) - 1:
+                        _form_tag, form_hidden, _form_namespace = self.elements[index]
+                        if form_hidden:
+                            child_tag, child_hidden, child_namespace = self.elements[index + 1]
+                            self.elements[index + 1] = (
+                                child_tag,
+                                child_hidden or form_hidden,
+                                child_namespace,
+                            )
+                        del self.elements[index]
+                        if (
+                            self.foster_table_index is not None
+                            and index < self.foster_table_index
+                        ):
+                            self.foster_table_index -= 1
+                        if (
+                            self.foster_start_index is not None
+                            and index < self.foster_start_index
+                        ):
+                            self.foster_start_index -= 1
+                        self._refresh_foster_parenting()
+                        return
                 del self.elements[index:]
                 self._refresh_foster_parenting()
                 return
-            if current_tag in HTML_SCOPE_BOUNDARIES:
+            if namespace == "html" and current_tag in HTML_SCOPE_BOUNDARIES:
                 return
+
+        if tag == "form" and self.form_pointer_active:
+            self.form_pointer_active = False
 
 
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
@@ -780,6 +806,17 @@ def strip_nonrendering_html_regions(
             break
         if not state.hidden:
             out.append(text[index:start])
+        if state.in_foreign_content and text.startswith("<![CDATA[", start):
+            cdata_end = text.find("]]>", start + len("<![CDATA["))
+            if cdata_end >= 0:
+                body = text[start + len("<![CDATA[") : cdata_end]
+                if not state.hidden:
+                    out.append(
+                        body.replace("<", "&lt;").replace(">", "&gt;")
+                    )
+                index = cdata_end + 3
+                continue
+
         token = INLINE_HTML_TAG_RE.match(text, start)
         if token is None:
             if not state.hidden:
@@ -843,12 +880,21 @@ def strip_nonrendering_html_regions(
         if not state.hidden and not own_hidden:
             out.append(source)
         self_closing = re.search(r"/[ \t\r\n]*>$", source) is not None
-        in_foreign_content = state.start_tag_is_foreign(tag)
+        namespace = state.namespace_for_start(tag)
+        in_foreign_content = namespace in {"svg", "math"}
+
+        if tag == "form":
+            state.form_pointer_active = True
+            if state.table_foster_parent_index() is not None:
+                # In table mode the form node is inserted for the pointer but
+                # immediately removed from the open-element stack.
+                continue
+
         if (
             tag not in HTML_VOID_TAGS
             and not (self_closing and in_foreign_content)
         ):
-            state.elements.append((tag, own_hidden))
+            state.elements.append((tag, own_hidden, namespace))
     return "".join(out), state if state.elements else None
 
 
@@ -990,8 +1036,6 @@ def visible_nonfenced_lines(
         source_index: int, value: str, *, literal: bool = False
     ) -> None:
         nonlocal raw_html_source_comment, raw_html_source_hidden_tag
-        if raw_html_source is None and raw_html_source_events is None:
-            return
         if literal:
             rendered = value
         else:
@@ -1118,8 +1162,7 @@ def visible_nonfenced_lines(
                         if raw_html_text is not None or raw_html_events is not None:
                             append_raw_html_text(source_index, html_view)
                 elif html_mode == "tag" and html_end == "pre":
-                    if raw_html_source is not None or raw_html_source_events is not None:
-                        append_raw_html_source(source_index, html_view)
+                    append_raw_html_source(source_index, html_view)
                     if raw_html_text is not None or raw_html_events is not None:
                         append_raw_html_text(source_index, html_view)
 
@@ -1146,7 +1189,7 @@ def visible_nonfenced_lines(
                         raw_html_source_hidden_tag = None
                     continue
                 if html_mode == "blank":
-                    if (raw_html_source is not None or raw_html_source_events is not None) and html_view.strip():
+                    if html_view.strip():
                         append_raw_html_source(source_index, html_view)
                     if raw_html_text is not None or raw_html_events is not None:
                         append_raw_html_text(source_index, html_view)
@@ -1237,7 +1280,7 @@ def visible_nonfenced_lines(
                         if recovered_close:
                             html_textarea_open = False
                     else:
-                        if (raw_html_source is not None or raw_html_source_events is not None) and (
+                        if (
                             html_mode == "blank"
                             or (html_mode == "tag" and html_end == "pre")
                         ):
@@ -1284,6 +1327,18 @@ def visible_nonfenced_lines(
             and not was_paragraph_open
         ):
             continue
+
+        if (
+            raw_for_parse
+            and not was_paragraph_open
+            and _line_keeps_paragraph_open(parse_view, False)
+        ):
+            for html_state in (
+                raw_html_source_hidden_tag,
+                raw_html_hidden_tag,
+            ):
+                if html_state is not None:
+                    html_state.process_generated_block_start("p")
 
         if raw_for_parse:
             append_visible(source_index, raw_for_parse)
