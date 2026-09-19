@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -82,6 +82,14 @@ Rendered prose.
         self.assertEqual(
             core.html_anchor_links(text),
             [("OPT-INC-001", destination)],
+        )
+
+    def test_repository_relative_key_is_posix_on_windows_paths(self) -> None:
+        root = PureWindowsPath(r"C:\\repo")
+        record = root / "optimizations" / "OPT-INC-001-example.md"
+        self.assertEqual(
+            core.repository_relative_posix(record, root),
+            "optimizations/OPT-INC-001-example.md",
         )
 
     def test_source_link_destination_must_be_complete_identity(self) -> None:
