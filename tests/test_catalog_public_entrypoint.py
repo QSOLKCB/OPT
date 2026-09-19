@@ -235,6 +235,70 @@ CASES = [
         source="[note](../sources/AUDIT-NOTE.md)",
         note="https://example.com/source",
     ),
+    # Current Codex review round.
+    dict(
+        id="codex-percent-encoded-source-note",
+        expected=0,
+        source="[note](../sources/AUDIT%2dNOTE.md)",
+        note="https://example.com/source",
+    ),
+    dict(
+        id="control-reject-encoded-source-separator",
+        expected=1,
+        source="[note](../sources/AUDIT%2fNOTE.md)",
+        note="https://example.com/source",
+        stderr_contains="## Source evidence lacks a concrete source identity",
+    ),
+    dict(
+        id="codex-generic-contract-placeholder-punctuation",
+        expected=1,
+        contract_field=("X", "TODO;"),
+        stderr_contains="has empty field X",
+    ),
+    dict(
+        id="codex-classification-template-punctuation",
+        expected=1,
+        contract_field=(
+            "Variables",
+            "continuous / integer / categorical / conditional / mixed;",
+        ),
+        stderr_contains="unselected template placeholder for Variables",
+    ),
+    dict(
+        id="codex-reference-dot-segment-record",
+        expected=1,
+        readme=(
+            "[details][record-dot]\n\n"
+            "[record-dot]: ./optimizations/does-not-exist.md"
+        ),
+        stderr_contains=(
+            "broken visible record link in README.md: "
+            "optimizations/does-not-exist.md"
+        ),
+    ),
+    dict(
+        id="codex-reference-percent-record",
+        expected=1,
+        readme=(
+            "[details][record-percent]\n\n"
+            "[record-percent]: optimiz%61tions/does-not-exist.md"
+        ),
+        stderr_contains=(
+            "broken visible record link in README.md: "
+            "optimizations/does-not-exist.md"
+        ),
+    ),
+    dict(
+        id="codex-template-record-title",
+        expected=1,
+        title="Optimization Name",
+        stderr_contains="empty/template/markup-only Optimization Name",
+    ),
+    dict(
+        id="codex-indented-source-evidence",
+        expected=0,
+        source="    https://example.com/source",
+    ),
 ]
 
 
@@ -276,6 +340,38 @@ class CatalogPublicEntrypointTests(unittest.TestCase):
                 (root / "sources" / "AUDIT-NOTE.md").write_text(
                     note + "\n", encoding="utf-8"
                 )
+
+            title = case.get("title")
+            if isinstance(title, str):
+                record_path = root / RECORD
+                record_text = record_path.read_text(encoding="utf-8")
+                _first, separator, rest = record_text.partition("\n")
+                self.assertTrue(separator)
+                record_path.write_text(
+                    "# OPT-INC-001 — " + title + "\n" + rest,
+                    encoding="utf-8",
+                )
+
+            contract_field = case.get("contract_field")
+            if (
+                isinstance(contract_field, tuple)
+                and len(contract_field) == 2
+                and all(isinstance(item, str) for item in contract_field)
+            ):
+                field, value = contract_field
+                record_path = root / RECORD
+                lines = record_path.read_text(encoding="utf-8").splitlines(keepends=True)
+                prefix = f"- {field}:"
+                matches = [
+                    index
+                    for index, line in enumerate(lines)
+                    if line.startswith(prefix)
+                ]
+                self.assertEqual(len(matches), 1)
+                index = matches[0]
+                ending = "\n" if lines[index].endswith("\n") else ""
+                lines[index] = f"{prefix} {value}{ending}"
+                record_path.write_text("".join(lines), encoding="utf-8")
 
             validation = case.get("validation")
             if isinstance(validation, str):
