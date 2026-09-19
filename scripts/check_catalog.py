@@ -670,7 +670,7 @@ def _decode_safe_record_path_escapes(path: str) -> str | None:
 
 
 def _record_destination_path(destination: str) -> str | None:
-    """Return one normalized repository record path with an optional fragment."""
+    """Return one normalized record-like path with an optional URL fragment."""
     path, _separator, _fragment = destination.partition("#")
     decoded = _decode_safe_record_path_escapes(path)
     if decoded is None or not decoded or decoded.startswith("/"):
@@ -681,7 +681,6 @@ def _record_destination_path(destination: str) -> str | None:
         normalized in {"", ".", ".."}
         or normalized.startswith("../")
         or not normalized.startswith("optimizations/")
-        or not normalized.endswith(".md")
     ):
         return None
     return normalized
@@ -690,7 +689,9 @@ def _record_destination_path(destination: str) -> str | None:
 def _synthetic_inline_destination(destination: str) -> str:
     """Emit a parsed reference destination as a safe angle-form inline target."""
     escaped = (
-        destination.replace("\\", "\\\\")
+        destination.replace("\r", "%0D")
+        .replace("\n", "%0A")
+        .replace("\\", "\\\\")
         .replace("<", "\\<")
         .replace(">", "\\>")
     )
