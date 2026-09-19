@@ -94,6 +94,13 @@ CASES = [
     ("misplaced-head-start-ignored", '<head hidden><a href="' + BROKEN + '">details</a></head>', False),
     ("svg-xlink-href-record-link", '<svg><a xlink:href="' + BROKEN + '"><text>details</text></a></svg>', False),
     ("html-xlink-href-control", '<a xlink:href="' + BROKEN + '">details</a>', True),
+    ("late-frameset-start-ignored", '<frameset hidden><a href="' + BROKEN + '">OPT-FAKE-999</a></frameset>', False),
+    ("misnested-formatting-reconstructs-hidden-i", '<b><i hidden></b><a href="' + BROKEN + '">OPT-FAKE-999</a></i>', True),
+    ("foreign-self-closing-anchor-empty-label", '<svg><a xlink:href="' + BROKEN + '"/><text>OPT-FAKE-999</text></svg>', True),
+    ("raw-comment-terminator-suffix", '<!--x--><a href="' + BROKEN + '">OPT-FAKE-999</a>', False),
+    ("raw-pi-terminator-suffix", '<?x?><a href="' + BROKEN + '">OPT-FAKE-999</a>', False),
+    ("raw-cdata-terminator-suffix", '<![CDATA[x]]><a href="' + BROKEN + '">OPT-FAKE-999</a>', False),
+    ("raw-declaration-terminator-suffix", '<!DOCTYPE html><a href="' + BROKEN + '">OPT-FAKE-999</a>', False),
     ("non-http-scheme-control", '<a href="urn:optimizations\\does-not-exist.md">details</a>', True),
 ]
 
@@ -302,6 +309,18 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         evidence = accepted.stdout + accepted.stderr
         self.assertEqual(accepted.returncode, 0, evidence)
         self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+
+
+        body_rejected = self.run_status_visibility_case("<body hidden></body>", "")
+        evidence = body_rejected.stdout + body_rejected.stderr
+        self.assertEqual(body_rejected.returncode, 1, evidence)
+        self.assertIn("must contain exactly one visible Status line", body_rejected.stderr)
+        self.assertNotIn("Traceback", body_rejected.stderr)
+
+        body_accepted = self.run_status_visibility_case("<body></body>", "")
+        evidence = body_accepted.stdout + body_accepted.stderr
+        self.assertEqual(body_accepted.returncode, 0, evidence)
+        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", body_accepted.stdout)
 
 
     def run_mandatory_section_case(
