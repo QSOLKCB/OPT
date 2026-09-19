@@ -250,9 +250,9 @@ def _reference_match_is_image(match: re.Match[str]) -> bool:
     )
 
 
-def _shortcut_reference_is_image_tail(match: re.Match[str]) -> bool:
-    """Return whether this shortcut label is the reference tail of one image."""
-    prefix = match.string[: match.start()]
+def _shortcut_reference_index_is_image_tail(text: str, start: int) -> bool:
+    """Return whether a shortcut label starts as the reference tail of one image."""
+    prefix = text[:start]
     blank_lines = list(
         re.finditer(r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)", prefix)
     )
@@ -262,7 +262,12 @@ def _shortcut_reference_is_image_tail(match: re.Match[str]) -> bool:
     if opener is None:
         return False
     absolute_start = paragraph_start + opener.start()
-    return not _is_backslash_escaped(match.string, absolute_start)
+    return not _is_backslash_escaped(text, absolute_start)
+
+
+def _shortcut_reference_is_image_tail(match: re.Match[str]) -> bool:
+    """Compatibility wrapper for regex-based callers."""
+    return _shortcut_reference_index_is_image_tail(match.string, match.start())
 
 
 def _is_indented_code_source(raw: str) -> bool:
@@ -1208,26 +1213,59 @@ def canonicalize_reference_record_links(text: str) -> str:
 
     text = REFERENCE_RECORD_LINK_RE.sub(replace_full, text)
 
-    def replace_short(match: re.Match[str]) -> str:
-        if _reference_match_is_image(match) or _shortcut_reference_is_image_tail(match):
-            return match.group(0)
-        if _is_backslash_escaped(match.string, match.start()):
-            return match.group(0)
-        label = match.group("label")
-        if _reference_label_has_blank_line(label):
-            return match.group(0)
-        destination = destinations.get(_normalized_reference_label(label))
-        if destination is None:
-            return match.group(0)
-        rendered_label = _render_reference_record_label(label)
-        record_path = _record_destination_path(destination)
-        if record_path is not None:
-            return f"[{label}]({_synthetic_inline_destination(destination)})"
-        if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None:
-            return f"[{label}]({INVALID_REFERENCE_DESTINATION})"
-        return match.group(0)
+    def rewrite_short_references(source: str) -> str:
+        out: list[str] = []
+        index = 0
+        while index < len(source):
+            if source[index] != "[" or _is_backslash_escaped(source, index):
+                out.append(source[index])
+                index += 1
+                continue
 
-    text = SHORT_REFERENCE_RECORD_LINK_RE.sub(replace_short, text)
+            label_close = _find_label_close_in_paragraph(source, index)
+            if label_close is None:
+                out.append(source[index])
+                index += 1
+                continue
+
+            after = label_close + 1
+            if after < len(source) and source[after] in "[(":
+                out.append(source[index:after])
+                index = after
+                continue
+
+            original = source[index:after]
+            if (
+                (index > 0 and source[index - 1] == "!"
+                 and not _is_backslash_escaped(source, index - 1))
+                or _shortcut_reference_index_is_image_tail(source, index)
+            ):
+                out.append(original)
+                index = after
+                continue
+
+            label = source[index + 1 : label_close]
+            destination = destinations.get(_normalized_reference_label(label))
+            if destination is None:
+                out.append(original)
+                index = after
+                continue
+
+            rendered_label = _render_reference_record_label(label)
+            record_path = _record_destination_path(destination)
+            if record_path is not None:
+                out.append(
+                    f"[{label}]({_synthetic_inline_destination(destination)})"
+                )
+            elif re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None:
+                out.append(f"[{label}]({INVALID_REFERENCE_DESTINATION})")
+            else:
+                out.append(original)
+            index = after
+
+        return "".join(out)
+
+    text = rewrite_short_references(text)
     for token, raw in protected_inline.items():
         text = text.replace(token, raw)
     text = normalizer.mask_inline_code_record_destinations(text)
