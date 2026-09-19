@@ -145,6 +145,14 @@ INLINE_HTML_TAG_RE = re.compile(
     r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\"[^\"]*\"|'[^']*'|[^ \t\r\n\"'=<>\x60]+))?)*"
     r"[ \t\r\n]*/?>"
 )
+HTML_RECOVERED_START_TAG_RE = re.compile(
+    r"<[A-Za-z][A-Za-z0-9-]*/[ \t\r\n]+"
+    r"(?:[A-Za-z_:][A-Za-z0-9_.:-]*"
+    r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\"[^\"]*\"|'[^']*'|[^ \t\r\n\"'=<>\x60]+))?"
+    r"(?:[ \t\r\n]+|(?=>)))*"
+    r">"
+)
+RECORD_HEADING_PREFIX_RE = re.compile(r"^# OPT-[A-Z]+-\d{3}\b")
 NONRENDERING_HTML_OPEN_RE = re.compile(
     r"<(?P<tag>script|style|template|head|title|iframe)(?:[ \t\r\n/>]|$)",
     re.IGNORECASE,
@@ -226,10 +234,65 @@ class HTMLVisibilityState:
 
     def __init__(self) -> None:
         self.elements: list[tuple[str, bool]] = []
+        self.foster_table_index: int | None = None
+        self.foster_start_index: int | None = None
 
     @property
     def hidden(self) -> bool:
+        if (
+            self.foster_table_index is not None
+            and self.foster_start_index is not None
+        ):
+            return (
+                any(
+                    hidden
+                    for _tag, hidden in self.elements[:self.foster_table_index]
+                )
+                or any(
+                    hidden
+                    for _tag, hidden in self.elements[self.foster_start_index:]
+                )
+            )
         return any(hidden for _tag, hidden in self.elements)
+
+    def table_foster_parent_index(self) -> int | None:
+        """Return the table whose in-table mode would foster-parent this token."""
+        for index in range(len(self.elements) - 1, -1, -1):
+            tag, _hidden = self.elements[index]
+            if tag in {"template", "td", "th", "caption"}:
+                return None
+            if tag == "table":
+                return index
+        return None
+
+    def start_is_foster_parented(self, source: str) -> bool:
+        """Return whether an ordinary start tag is processed with foster parenting."""
+        new_tag = html_start_tag_name(source)
+        if new_tag is None:
+            return False
+        table_index = self.table_foster_parent_index()
+        if table_index is None:
+            return False
+        non_fostered = {
+            "caption", "colgroup", "tbody", "tfoot", "thead", "col", "tr",
+            "td", "th", "table", "style", "script", "template", "form",
+        }
+        return new_tag not in non_fostered
+
+    def begin_foster_parenting(self) -> None:
+        table_index = self.table_foster_parent_index()
+        if table_index is None:
+            return
+        self.foster_table_index = table_index
+        self.foster_start_index = len(self.elements)
+
+    def _refresh_foster_parenting(self) -> None:
+        if (
+            self.foster_start_index is not None
+            and len(self.elements) <= self.foster_start_index
+        ):
+            self.foster_table_index = None
+            self.foster_start_index = None
 
     @property
     def in_select_mode(self) -> bool:
@@ -292,6 +355,7 @@ class HTMLVisibilityState:
                 tag, _hidden = self.elements[index]
                 if tag == new_tag:
                     del self.elements[index:]
+                    self._refresh_foster_parenting()
                     break
                 if tag in HTML_SCOPE_BOUNDARIES:
                     break
@@ -316,6 +380,7 @@ class HTMLVisibilityState:
                 if above & boundaries:
                     continue
                 del self.elements[index:]
+                self._refresh_foster_parenting()
                 changed = True
                 break
             if not changed:
@@ -326,6 +391,7 @@ class HTMLVisibilityState:
             current_tag = self.elements[index][0]
             if current_tag == tag:
                 del self.elements[index:]
+                self._refresh_foster_parenting()
                 return
             if current_tag in HTML_SCOPE_BOUNDARIES:
                 return
@@ -649,6 +715,8 @@ def strip_nonrendering_html_regions(
         if state.start_is_ignored(source):
             continue
         state.close_for_start(source)
+        if state.start_is_foster_parented(source):
+            state.begin_foster_parenting()
         own_hidden = (
             tag in NONRENDERING_HTML_TAGS
             or HTML_HIDDEN_ATTR_RE.search(source) is not None
@@ -2036,6 +2104,10 @@ def visible_html_record_links(
             break
 
         tag = INLINE_HTML_TAG_RE.match(text, start)
+        recovered = False
+        if tag is None and not markdown_contents:
+            tag = HTML_RECOVERED_START_TAG_RE.match(text, start)
+            recovered = tag is not None
         if tag is None:
             index = start + 1
             continue
@@ -2044,7 +2116,12 @@ def visible_html_record_links(
             continue
 
         tag_source = tag.group(0)
-        if re.match(r"<a(?:[ \t\r\n]|>)", tag_source, re.IGNORECASE) is None:
+        anchor_start = (
+            re.match(r"<a(?:[ \t\r\n]|>)", tag_source, re.IGNORECASE)
+            if not recovered
+            else re.match(r"<a/[ \t\r\n]+", tag_source, re.IGNORECASE)
+        )
+        if anchor_start is None:
             index = tag.end()
             continue
 
@@ -3180,10 +3257,17 @@ def require_prefixed_fields(
 
 records: dict[str, Path] = {}
 status_categories: dict[str, str] = {}
-for path in sorted(OPT_DIR.rglob("OPT-*.md")):
+for path in sorted(OPT_DIR.rglob("*.md")):
     text = path.read_text(encoding="utf-8")
     lines = visible_nonfenced_lines(markdown_source_lines(text))
     first = lines[0] if lines else ""
+    record_headed = any(
+        RECORD_HEADING_PREFIX_RE.match(line) is not None for line in lines
+    )
+    filename_claims_record = path.name.startswith("OPT-")
+    if not record_headed and not filename_claims_record:
+        continue
+
     match = ID_RE.match(first)
     if not match:
         die(f"bad or hidden record heading: {path.relative_to(ROOT)}")
