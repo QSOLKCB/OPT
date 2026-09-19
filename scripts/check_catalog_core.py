@@ -162,6 +162,44 @@ HTML_VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input",
     "link", "meta", "param", "source", "track", "wbr",
 }
+
+HTML_IMPLICIT_CLOSE_STARTS = {
+    "p": {
+        "address", "article", "aside", "blockquote", "div", "dl", "fieldset",
+        "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header",
+        "hgroup", "hr", "main", "menu", "nav", "ol", "p", "pre", "search",
+        "section", "table", "ul",
+    },
+    "li": {"li"},
+    "dt": {"dt", "dd"},
+    "dd": {"dt", "dd"},
+    "rt": {"rt", "rp"},
+    "rp": {"rt", "rp"},
+    "option": {"option", "optgroup"},
+    "optgroup": {"optgroup"},
+    "thead": {"tbody", "tfoot"},
+    "tbody": {"tbody", "tfoot"},
+    "tfoot": {"tbody"},
+    "tr": {"tr"},
+    "td": {"td", "th"},
+    "th": {"td", "th"},
+}
+
+
+def html_start_tag_name(source: str) -> str | None:
+    match = re.match(r"<(?P<tag>[A-Za-z][A-Za-z0-9-]*)", source)
+    return match.group("tag").lower() if match is not None else None
+
+
+def html_start_implicitly_closes(open_tag: str, source: str) -> bool:
+    """Return whether this parsed start tag implicitly closes the open element."""
+    new_tag = html_start_tag_name(source)
+    return bool(
+        new_tag is not None
+        and new_tag in HTML_IMPLICIT_CLOSE_STARTS.get(open_tag, set())
+    )
+
+
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
 SECTION_BOUNDARY_RE = re.compile(r"^#{1,2}(?:\s|$)")
 SETEXT_H1_RE = re.compile(r"^ {0,3}=+[ \t]*$")
@@ -454,6 +492,11 @@ def strip_nonrendering_html_regions(
                 depth -= 1
                 index = tag_match.end()
                 hidden_state = None if depth == 0 else (hidden_tag, depth)
+                continue
+
+            if html_start_implicitly_closes(hidden_tag, source):
+                hidden_state = None
+                index = tag_start
                 continue
 
             if re.match(
