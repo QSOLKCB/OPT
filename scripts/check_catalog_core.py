@@ -218,6 +218,10 @@ HTML_SELECT_HANDLED_START_TAGS = {
     "script", "template",
 }
 HTML_SELECT_HANDLED_END_TAGS = {"option", "optgroup", "select", "template"}
+HTML_ACTIVE_FORMATTING_TAGS = {
+    "a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small",
+    "strike", "strong", "tt", "u",
+}
 
 
 def html_start_tag_name(source: str) -> str | None:
@@ -251,6 +255,7 @@ class HTMLVisibilityState:
         self.foster_table_index: int | None = None
         self.foster_start_index: int | None = None
         self.form_pointer_active = False
+        self.document_hidden = False
 
     @property
     def hidden(self) -> bool:
@@ -259,7 +264,8 @@ class HTMLVisibilityState:
             and self.foster_start_index is not None
         ):
             return (
-                any(
+                self.document_hidden
+                or any(
                     hidden
                     for _tag, hidden, _namespace
                     in self.elements[:self.foster_table_index]
@@ -270,7 +276,9 @@ class HTMLVisibilityState:
                     in self.elements[self.foster_start_index:]
                 )
             )
-        return any(hidden for _tag, hidden, _namespace in self.elements)
+        return self.document_hidden or any(
+            hidden for _tag, hidden, _namespace in self.elements
+        )
 
     @property
     def current_namespace(self) -> str:
@@ -377,7 +385,7 @@ class HTMLVisibilityState:
 
         # Markdown raw HTML is parsed after the document body has begun; a
         # misplaced <head> start is ignored by HTML's in-body insertion mode.
-        if new_tag == "head":
+        if new_tag in {"head", "frameset"}:
             return True
 
         if (
@@ -390,6 +398,11 @@ class HTMLVisibilityState:
             self.in_select_mode
             and new_tag not in HTML_SELECT_HANDLED_START_TAGS
         )
+
+    def merge_body_attributes(self, source: str) -> None:
+        """Merge attributes from a duplicate body start onto the document body."""
+        if HTML_HIDDEN_ATTR_RE.search(source) is not None:
+            self.document_hidden = True
 
     def end_is_ignored(self, tag: str) -> bool:
         return (
@@ -508,6 +521,28 @@ class HTMLVisibilityState:
             if current_tag == tag:
                 if namespace != "html":
                     del self.elements[index:]
+                    self._refresh_foster_parenting()
+                    return
+                if (
+                    tag in HTML_ACTIVE_FORMATTING_TAGS
+                    and tag != "a"
+                    and index < len(self.elements) - 1
+                ):
+                    # Adoption-agency recovery removes the target formatting
+                    # element while later active formatting entries can be
+                    # reconstructed. Retaining them preserves their effective
+                    # hidden state for subsequently inserted content.
+                    del self.elements[index]
+                    if (
+                        self.foster_table_index is not None
+                        and index < self.foster_table_index
+                    ):
+                        self.foster_table_index -= 1
+                    if (
+                        self.foster_start_index is not None
+                        and index < self.foster_start_index
+                    ):
+                        self.foster_start_index -= 1
                     self._refresh_foster_parenting()
                     return
                 if tag == "form":
@@ -880,6 +915,9 @@ def strip_nonrendering_html_regions(
             # In "in table" mode a nested table start closes the current table
             # and is reprocessed rather than being nested beneath it.
             state.close("table")
+        if tag == "body":
+            state.merge_body_attributes(source)
+            continue
         if state.start_is_ignored(source):
             continue
         state.break_out_of_foreign_content(source)
@@ -908,7 +946,12 @@ def strip_nonrendering_html_regions(
             and not (self_closing and in_foreign_content)
         ):
             state.elements.append((tag, own_hidden, namespace))
-    return "".join(out), state if state.elements else None
+    return (
+        "".join(out),
+        state
+        if state.elements or state.document_hidden or state.form_pointer_active
+        else None,
+    )
 
 
 def textarea_literal_parts(
@@ -1192,14 +1235,19 @@ def visible_nonfenced_lines(
                     continue
                 if html_mode == "token":
                     if html_end is not None and html_end in html_view:
+                        terminator = html_end
+                        token_end = html_view.find(terminator) + len(terminator)
+                        suffix = html_view[token_end:]
                         html_mode = None
                         html_end = None
                         html_quote_depth = 0
                         html_list_indent = 0
                         raw_html_comment = False
                         raw_html_source_comment = False
-                        raw_html_hidden_tag = None
-                        raw_html_source_hidden_tag = None
+                        if suffix:
+                            append_raw_html_source(source_index, suffix)
+                            if raw_html_text is not None or raw_html_events is not None:
+                                append_raw_html_text(source_index, suffix)
                     continue
                 if html_mode == "blank":
                     if html_view.strip():
@@ -1317,14 +1365,19 @@ def visible_nonfenced_lines(
                         and html_end is not None
                         and html_end in block_view
                     ):
+                        terminator = html_end
+                        token_end = block_view.find(terminator) + len(terminator)
+                        suffix = block_view[token_end:]
                         html_mode = None
                         html_end = None
                         html_quote_depth = 0
                         html_list_indent = 0
                         raw_html_comment = False
                         raw_html_source_comment = False
-                        raw_html_hidden_tag = None
-                        raw_html_source_hidden_tag = None
+                        if suffix:
+                            append_raw_html_source(source_index, suffix)
+                            if raw_html_text is not None or raw_html_events is not None:
+                                append_raw_html_text(source_index, suffix)
                     continue
 
                 raw_for_parse, inline_comment = strip_inline_html_comments(raw, False)
@@ -2413,10 +2466,17 @@ def visible_html_record_links(
             index = tag.end()
             continue
 
+        anchor_namespace = html_namespace_at_offset(text, start)
         href = first_html_attribute_value(tag_source, "href")
-        if href is None and html_namespace_at_offset(text, start) == "svg":
+        if href is None and anchor_namespace == "svg":
             href = first_html_attribute_value(tag_source, "xlink:href")
         if href is None:
+            index = tag.end()
+            continue
+        if (
+            anchor_namespace in {"svg", "math"}
+            and re.search(r"/[ \t\r\n]*>$", tag_source) is not None
+        ):
             index = tag.end()
             continue
 
