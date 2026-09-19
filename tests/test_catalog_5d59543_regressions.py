@@ -71,6 +71,15 @@ CASES = [
     ("backslash-path", '<a href="optimizations\\does-not-exist.md">details</a>', False),
     ("entity-backslash-path", '<a href="optimizations&#92;does-not-exist.md">details</a>', False),
     ("valid-backslash-path", '<a href="' + RECORD.replace('/', '\\') + '">OPT-INC-001</a>', True),
+    ("select-input-closes-select", '<select hidden><input><a href="' + BROKEN + '">details</a>', False),
+    ("nested-select-closes-select", '<select hidden><select><a href="' + BROKEN + '">details</a>', False),
+    ("heading-current-node-recovery", '<h1 hidden>x<h2><a href="' + BROKEN + '">details</a></h2>', False),
+    ("noframes-is-raw-text", '<noframes><a href="' + BROKEN + '">details</a></noframes>', True),
+    ("mathml-mtext-html-integration", '<math><mtext><div hidden/><a href="' + BROKEN + '">details</a></mtext></math>', True),
+    ("noncurrent-form-preserves-hidden-descendant", '<form hidden><div>x<form></form><a href="' + BROKEN + '">details</a></div>', True),
+    ("legacy-image-is-void-img", '<image hidden><a href="' + BROKEN + '">details</a>', False),
+    ("code-span-heading-boundary", "`open\n# [OPT-FAKE-999](" + BROKEN + ")`", False),
+    ("code-span-soft-line-control", "`open\n[OPT-FAKE-999](" + BROKEN + ")`", True),
     ("non-http-scheme-control", '<a href="urn:optimizations\\does-not-exist.md">details</a>', True),
 ]
 
