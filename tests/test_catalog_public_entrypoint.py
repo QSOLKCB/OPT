@@ -344,6 +344,39 @@ CASES = [
             "[angle-valid]: <" + VALID_RECORD + ">"
         ),
     ),
+    dict(
+        id="codex-reference-entity-newline",
+        expected=1,
+        readme=(
+            "[details][record-newline]\n\n"
+            "[record-newline]: <optimizations/does-not&#10;exist.md>"
+        ),
+        stderr_contains="broken visible record link in README.md:",
+    ),
+    dict(
+        id="codex-reference-invalid-txt-suffix",
+        expected=1,
+        readme=(
+            "[details][bad-txt]\n\n"
+            "[bad-txt]: optimizations/does-not-exist.txt"
+        ),
+        stderr_contains=(
+            "visible record link in README.md has invalid destination: "
+            "optimizations/does-not-exist.txt"
+        ),
+    ),
+    dict(
+        id="codex-reference-query-suffix",
+        expected=1,
+        readme=(
+            "[details][bad-query]\n\n"
+            "[bad-query]: optimizations/does-not-exist.md?x=1"
+        ),
+        stderr_contains=(
+            "visible record link in README.md has invalid destination: "
+            "optimizations/does-not-exist.md?x=1"
+        ),
+    ),
 ]
 
 
@@ -501,6 +534,55 @@ class CatalogPublicEntrypointTests(unittest.TestCase):
                 stderr_contains = case.get("stderr_contains")
                 if isinstance(stderr_contains, str):
                     self.assertIn(stderr_contains, completed.stderr)
+
+    def test_symlinked_markdown_input_cannot_modify_external_target(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="opt-catalog-symlink-") as temporary:
+            temp = Path(temporary)
+            root = temp / "repo"
+            root.mkdir()
+
+            for name in ("README.md", "CATALOG.md", "OPTIMIZATION-PROBLEM.md"):
+                shutil.copy2(ROOT / name, root / name)
+            for name in ("scripts", "optimizations", "sources"):
+                shutil.copytree(
+                    ROOT / name,
+                    root / name,
+                    ignore=shutil.ignore_patterns("__pycache__"),
+                )
+
+            record_path = root / RECORD
+            original = record_path.read_text(encoding="utf-8")
+            before, rest = original.split("## Validation", 1)
+            _old_validation, after = rest.split("## Target-repo adaptation", 1)
+            external_text = (
+                before
+                + "## Validation\n\nTODO;\n\n## Target-repo adaptation"
+                + after
+            )
+
+            external = temp / "external-record.md"
+            external.write_text(external_text, encoding="utf-8")
+            expected_external = external.read_bytes()
+
+            record_path.unlink()
+            record_path.symlink_to(external.resolve())
+
+            completed = subprocess.run(
+                [sys.executable, "scripts/check_catalog.py"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertNotEqual(
+                completed.returncode,
+                0,
+                completed.stdout + completed.stderr,
+            )
+            self.assertIn("symlinked Markdown input is not allowed", completed.stderr)
+            self.assertEqual(external.read_bytes(), expected_external)
 
 
 if __name__ == "__main__":
