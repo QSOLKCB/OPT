@@ -299,6 +299,51 @@ CASES = [
         expected=0,
         source="    https://example.com/source",
     ),
+    # Latest Codex follow-up.
+    dict(
+        id="codex-percent-encoded-note-suffix",
+        expected=0,
+        source="[note](../sources/AUDIT-NOTE%2emd)",
+        note="https://example.com/source",
+    ),
+    dict(
+        id="codex-punctuated-todo-title",
+        expected=1,
+        title="TODO;",
+        stderr_contains="empty/template/markup-only Optimization Name",
+    ),
+    dict(
+        id="codex-punctuated-tbd-title",
+        expected=1,
+        title="TBD,",
+        stderr_contains="empty/template/markup-only Optimization Name",
+    ),
+    dict(
+        id="codex-punctuated-template-title",
+        expected=1,
+        title="Optimization Name;",
+        stderr_contains="empty/template/markup-only Optimization Name",
+    ),
+    dict(
+        id="codex-angle-reference-destination-with-space",
+        expected=1,
+        readme=(
+            "[details][angle-record]\n\n"
+            "[angle-record]: <optimizations/does not exist.md>"
+        ),
+        stderr_contains=(
+            "broken visible record link in README.md: "
+            "optimizations/does not exist.md"
+        ),
+    ),
+    dict(
+        id="control-angle-reference-valid-record",
+        expected=0,
+        readme=(
+            "[OPT-INC-001][angle-valid]\n\n"
+            "[angle-valid]: <" + VALID_RECORD + ">"
+        ),
+    ),
 ]
 
 
