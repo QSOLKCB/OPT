@@ -226,6 +226,18 @@ class HTMLVisibilityState:
         new_tag = html_start_tag_name(source)
         if new_tag is None:
             return
+
+        # A button start tag closes an earlier button when that button is in
+        # scope before the new element is inserted.
+        if new_tag == "button":
+            for index in range(len(self.elements) - 1, -1, -1):
+                tag, _hidden = self.elements[index]
+                if tag == "button":
+                    del self.elements[index:]
+                    break
+                if tag in HTML_SCOPE_BOUNDARIES:
+                    break
+
         # More than one optional element can close, e.g. p inside an old li.
         while True:
             changed = False
@@ -253,8 +265,11 @@ class HTMLVisibilityState:
 
     def close(self, tag: str) -> None:
         for index in range(len(self.elements) - 1, -1, -1):
-            if self.elements[index][0] == tag:
+            current_tag = self.elements[index][0]
+            if current_tag == tag:
                 del self.elements[index:]
+                return
+            if current_tag in HTML_SCOPE_BOUNDARIES:
                 return
 
 
@@ -551,7 +566,9 @@ def strip_nonrendering_html_regions(
                 if not was_hidden:
                     out.append(source)
             elif not state.hidden:
-                out.append(source)
+                out.append(
+                    source.replace("<", "&lt;").replace(">", "&gt;")
+                )
             continue
         if end_tag is not None:
             was_hidden = state.hidden
@@ -571,7 +588,18 @@ def strip_nonrendering_html_regions(
         )
         if not state.hidden and not own_hidden:
             out.append(source)
-        if tag not in HTML_VOID_TAGS:
+        self_closing = re.search(r"/[ \t\r\n]*>$", source) is not None
+        in_foreign_content = (
+            tag in {"svg", "math"}
+            or any(
+                ancestor in {"svg", "math"}
+                for ancestor, _hidden in state.elements
+            )
+        )
+        if (
+            tag not in HTML_VOID_TAGS
+            and not (self_closing and in_foreign_content)
+        ):
             state.elements.append((tag, own_hidden))
     return "".join(out), state if state.elements else None
 
