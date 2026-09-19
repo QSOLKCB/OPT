@@ -1314,7 +1314,10 @@ def markdown_inputs(root: Path) -> list[Path]:
         root / "CATALOG.md",
         root / "OPTIMIZATION-PROBLEM.md",
     ]
-    paths.extend(sorted((root / "optimizations").rglob("OPT-*.md")))
+    # Keep normalization discovery in lockstep with the core validator:
+    # any Markdown file under optimizations/ can declare an OPT record even if
+    # its filename is itself invalid and must therefore be rejected later.
+    paths.extend(sorted((root / "optimizations").rglob("*.md")))
     return [path for path in paths if path.is_file()]
 
 
