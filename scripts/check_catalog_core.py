@@ -1593,10 +1593,25 @@ def decode_html_attribute_references(value: str) -> str:
     return "".join(out)
 
 
-HTML_HREF_RE = re.compile(
-    r"""(?:^|[ \t\r\n])href[ \t\r\n]*=[ \t\r\n]*(?:"([^"]*)"|'([^']*)'|([^ \t\r\n"'=<>\x60]+))""",
+HTML_ATTRIBUTE_RE = re.compile(
+    r"""(?:^|[ \t\r\n])(?P<name>[A-Za-z_:][A-Za-z0-9_.:-]*)"""
+    r"""(?:[ \t\r\n]*=[ \t\r\n]*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)'|(?P<bare>[^ \t\r\n"'=<>\x60]+)))?""",
     re.IGNORECASE,
 )
+
+
+def first_html_attribute_value(source: str, attribute: str) -> str | None:
+    """Return the first duplicate attribute's value, matching HTML parsing."""
+    target = attribute.casefold()
+    for match in HTML_ATTRIBUTE_RE.finditer(source):
+        if match.group("name").casefold() != target:
+            continue
+        for group in ("double", "single", "bare"):
+            value = match.group(group)
+            if value is not None:
+                return value
+        return None
+    return None
 
 
 def strip_preformatted_html_scan_contents(
@@ -1718,11 +1733,10 @@ def html_anchor_links(text: str) -> list[tuple[str, str]]:
             index = tag.end()
             continue
 
-        href_match = HTML_HREF_RE.search(tag_source)
-        if href_match is None:
+        href = first_html_attribute_value(tag_source, "href")
+        if href is None:
             index = tag.end()
             continue
-        href = next(value for value in href_match.groups() if value is not None)
 
         extent = html_anchor_label_extent(text, tag.end())
         if extent is None:
@@ -1785,13 +1799,10 @@ def visible_html_record_links(
             index = tag.end()
             continue
 
-        href_match = HTML_HREF_RE.search(tag_source)
-        if href_match is None:
+        href = first_html_attribute_value(tag_source, "href")
+        if href is None:
             index = tag.end()
             continue
-        href = next(
-            value for value in href_match.groups() if value is not None
-        )
 
         extent = html_anchor_label_extent(text, tag.end())
         if extent is None:
@@ -2888,7 +2899,7 @@ def require_prefixed_fields(
 
 records: dict[str, Path] = {}
 status_categories: dict[str, str] = {}
-for path in sorted(OPT_DIR.glob("*.md")):
+for path in sorted(OPT_DIR.rglob("OPT-*.md")):
     text = path.read_text(encoding="utf-8")
     lines = visible_nonfenced_lines(markdown_source_lines(text))
     first = lines[0] if lines else ""
@@ -3012,38 +3023,6 @@ if missing_frozen:
     die(f"frozen v1 record(s) missing: {', '.join(missing_frozen)}")
 
 record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in records.items()}
-
-
-HTML_ATTRIBUTE_RE = re.compile(
-    r"""(?:^|[ \t\r\n])(?P<name>[A-Za-z_:][A-Za-z0-9_.:-]*)"""
-    r"""(?:[ \t\r\n]*=[ \t\r\n]*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)'|(?P<bare>[^ \t\r\n"'=<>\x60]+)))?""",
-    re.IGNORECASE,
-)
-
-
-def first_html_attribute_value(source: str, attribute: str) -> str | None:
-    """Return the first duplicate attribute's value, matching HTML parsing."""
-    target = attribute.casefold()
-    for match in HTML_ATTRIBUTE_RE.finditer(source):
-        if match.group("name").casefold() != target:
-            continue
-        for group in ("double", "single", "bare"):
-            value = match.group(group)
-            if value is not None:
-                return value
-        return None
-    return None
-
-
-HTML_ID_ATTR_RE = re.compile(
-    r"""(?:^|[ \t\r\n])id[ \t\r\n]*=[ \t\r\n]*(?:"([^"]+)"|'([^']+)'|([^ \t\r\n"'=<>\x60]+))""",
-    re.IGNORECASE,
-)
-HTML_NAME_ATTR_RE = re.compile(
-    r"""(?:^|[ \t\r\n])name[ \t\r\n]*=[ \t\r\n]*(?:"([^"]+)"|'([^']+)'|([^ \t\r\n"'=<>\x60]+))""",
-    re.IGNORECASE,
-)
-
 
 
 
