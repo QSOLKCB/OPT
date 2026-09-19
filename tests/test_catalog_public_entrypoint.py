@@ -425,6 +425,51 @@ CASES = [
             '<a href="  ' + VALID_RECORD + '  ">OPT-INC-001</a>'
         ),
     ),
+    # Post-Astra Codex follow-up.
+    dict(
+        id="codex-inline-mask-paragraph-boundary",
+        expected=1,
+        readme=(
+            "[outer\n\n[record]](not-a-record)\n\n"
+            "[record]: optimizations/does-not-exist.md"
+        ),
+        stderr_contains=(
+            "broken visible record link in README.md: "
+            "optimizations/does-not-exist.md"
+        ),
+    ),
+    dict(
+        id="control-inline-mask-soft-line",
+        expected=0,
+        readme=(
+            "[outer\n[record]](not-a-record)\n\n"
+            "[record]: optimizations/does-not-exist.md"
+        ),
+    ),
+    dict(
+        id="codex-hidden-p-implicit-close",
+        expected=1,
+        readme=(
+            '<p hidden>x<p>'
+            '<a href="optimizations/does-not-exist.md">details</a>'
+        ),
+        stderr_contains=(
+            "broken visible record link in README.md: "
+            "optimizations/does-not-exist.md"
+        ),
+    ),
+    dict(
+        id="codex-hidden-li-implicit-close",
+        expected=1,
+        readme=(
+            '<ul><li hidden>x<li>'
+            '<a href="optimizations/does-not-exist.md">details</a></ul>'
+        ),
+        stderr_contains=(
+            "broken visible record link in README.md: "
+            "optimizations/does-not-exist.md"
+        ),
+    ),
 ]
 
 
