@@ -88,6 +88,12 @@ CASES = [
     ("nested-nobr-recovery", '<nobr hidden>x<nobr></nobr><a href="' + BROKEN + '">details</a>', False),
     ("foreign-cdata-is-text", '<svg><![CDATA[<a href="' + BROKEN + '">details</a>]]></svg>', True),
     ("table-only-tr-ignored-in-body", '<div><tr hidden><a href="' + BROKEN + '">details</a></div>', False),
+    ("foreign-end-tag-closes-svg", '<svg hidden></svg><a href="' + BROKEN + '">details</a>', False),
+    ("generated-heading-closes-hidden-p", '<p hidden>\n\n# [details](' + BROKEN + ')', False),
+    ("nested-table-start-closes-active-table", '<table hidden><table><tr><td><a href="' + BROKEN + '">details</a></td></tr></table>', False),
+    ("misplaced-head-start-ignored", '<head hidden><a href="' + BROKEN + '">details</a></head>', False),
+    ("svg-xlink-href-record-link", '<svg><a xlink:href="' + BROKEN + '"><text>details</text></a></svg>', False),
+    ("html-xlink-href-control", '<a xlink:href="' + BROKEN + '">details</a>', True),
     ("non-http-scheme-control", '<a href="urn:optimizations\\does-not-exist.md">details</a>', True),
 ]
 
