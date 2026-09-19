@@ -191,7 +191,16 @@ HTML_SCOPE_BOUNDARIES = {
     "applet", "caption", "html", "table", "td", "th", "marquee",
     "object", "template",
 }
-HTML_RAW_TEXT_ELEMENTS = {"script", "style", "title", "iframe", "textarea", "xmp"}
+HTML_RAW_TEXT_ELEMENTS = {
+    "script", "style", "title", "iframe", "textarea", "xmp", "plaintext",
+}
+HTML_EOF_TEXT_ELEMENTS = {"plaintext"}
+SVG_HTML_INTEGRATION_POINTS = {"foreignobject", "desc", "title"}
+HTML_SELECT_HANDLED_START_TAGS = {
+    "option", "optgroup", "hr", "select", "input", "keygen", "textarea",
+    "script", "template",
+}
+HTML_SELECT_HANDLED_END_TAGS = {"option", "optgroup", "select", "template"}
 
 
 def html_start_tag_name(source: str) -> str | None:
@@ -222,17 +231,66 @@ class HTMLVisibilityState:
     def hidden(self) -> bool:
         return any(hidden for _tag, hidden in self.elements)
 
+    @property
+    def in_select_mode(self) -> bool:
+        """Return whether the current token is parsed by HTML's select mode."""
+        for tag, _hidden in reversed(self.elements):
+            if tag == "template":
+                return False
+            if tag == "select":
+                return True
+        return False
+
+    def start_is_ignored(self, source: str) -> bool:
+        """Model start tags that the relevant HTML insertion modes ignore."""
+        new_tag = html_start_tag_name(source)
+        if new_tag is None:
+            return False
+
+        # The form element pointer prevents a nested form start from creating
+        # another element. Its following </form> still closes the active form.
+        if new_tag == "form" and any(
+            tag == "form" for tag, _hidden in self.elements
+        ):
+            return True
+
+        # In select mode, arbitrary markup such as <a> is a parse error and is
+        # ignored. Its character data remains rendered text.
+        return (
+            self.in_select_mode
+            and new_tag not in HTML_SELECT_HANDLED_START_TAGS
+        )
+
+    def end_is_ignored(self, tag: str) -> bool:
+        """Return whether select insertion mode ignores this end tag."""
+        return (
+            self.in_select_mode
+            and tag not in HTML_SELECT_HANDLED_END_TAGS
+        )
+
+    def start_tag_is_foreign(self, new_tag: str) -> bool:
+        """Return whether a start tag is parsed in a foreign namespace."""
+        foreign = False
+        for tag, _hidden in self.elements:
+            if foreign and tag in SVG_HTML_INTEGRATION_POINTS:
+                foreign = False
+                continue
+            if not foreign and tag in {"svg", "math"}:
+                foreign = True
+        return new_tag in {"svg", "math"} or foreign
+
     def close_for_start(self, source: str) -> None:
         new_tag = html_start_tag_name(source)
         if new_tag is None:
             return
 
-        # A button start tag closes an earlier button when that button is in
-        # scope before the new element is inserted.
-        if new_tag == "button":
+        # Nested buttons and anchors trigger HTML recovery before the new
+        # element is inserted. This can expose a sibling that was previously
+        # beneath a hidden ancestor.
+        if new_tag in {"button", "a"}:
             for index in range(len(self.elements) - 1, -1, -1):
                 tag, _hidden = self.elements[index]
-                if tag == "button":
+                if tag == new_tag:
                     del self.elements[index:]
                     break
                 if tag in HTML_SCOPE_BOUNDARIES:
@@ -560,7 +618,12 @@ def strip_nonrendering_html_regions(
         end_tag = end.group(1).lower() if end is not None else None
         if state.elements and state.elements[-1][0] in HTML_RAW_TEXT_ELEMENTS:
             raw_tag = state.elements[-1][0]
-            if end_tag == raw_tag:
+            if raw_tag in HTML_EOF_TEXT_ELEMENTS:
+                if not state.hidden:
+                    out.append(
+                        source.replace("<", "&lt;").replace(">", "&gt;")
+                    )
+            elif end_tag == raw_tag:
                 was_hidden = state.hidden
                 state.elements.pop()
                 if not was_hidden:
@@ -571,6 +634,8 @@ def strip_nonrendering_html_regions(
                 )
             continue
         if end_tag is not None:
+            if state.end_is_ignored(end_tag):
+                continue
             was_hidden = state.hidden
             state.close(end_tag)
             if not was_hidden or not state.hidden:
@@ -581,6 +646,8 @@ def strip_nonrendering_html_regions(
             if not state.hidden:
                 out.append(source)
             continue
+        if state.start_is_ignored(source):
+            continue
         state.close_for_start(source)
         own_hidden = (
             tag in NONRENDERING_HTML_TAGS
@@ -589,13 +656,7 @@ def strip_nonrendering_html_regions(
         if not state.hidden and not own_hidden:
             out.append(source)
         self_closing = re.search(r"/[ \t\r\n]*>$", source) is not None
-        in_foreign_content = (
-            tag in {"svg", "math"}
-            or any(
-                ancestor in {"svg", "math"}
-                for ancestor, _hidden in state.elements
-            )
-        )
+        in_foreign_content = state.start_tag_is_foreign(tag)
         if (
             tag not in HTML_VOID_TAGS
             and not (self_closing and in_foreign_content)
