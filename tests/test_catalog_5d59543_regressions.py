@@ -65,6 +65,8 @@ CASES = [
     ("table-foster-parented-anchor", '<table hidden><a href="' + BROKEN + '">details</a></table>', False),
     ("table-cell-hidden-control", '<table hidden><tr><td><a href="' + BROKEN + '">details</a></td></tr></table>', True),
     ("raw-block-recovered-anchor", '<div>\n<a/ href="' + BROKEN + '">details</a>\n</div>', False),
+    ("raw-block-recovered-anchor-spaced-solidus", '<div>\n<a / href="' + BROKEN + '">details</a>\n</div>', False),
+    ("nested-foster-hidden-anchor", '<table><div hidden><a href="' + BROKEN + '">details</a></div></table>', True),
     ("markdown-malformed-anchor-control", 'text <a/ href="' + BROKEN + '">details</a>', True),
     ("backslash-path", '<a href="optimizations\\does-not-exist.md">details</a>', False),
     ("entity-backslash-path", '<a href="optimizations&#92;does-not-exist.md">details</a>', False),
@@ -177,9 +179,73 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         )
         self.assertNotIn("Traceback", rejected.stderr)
 
+        indented = self.run_extra_optimization_file(
+            "new-record.md",
+            " # OPT-NEW-001 — Indented record heading\n",
+        )
+        evidence = indented.stdout + indented.stderr
+        self.assertEqual(indented.returncode, 1, evidence)
+        self.assertIn(
+            "record Markdown filename does not follow OPT-<KIND>-<NNN>-... convention",
+            indented.stderr,
+        )
+        self.assertNotIn("Traceback", indented.stderr)
+
         accepted = self.run_extra_optimization_file(
             "NOTES.md",
             "# Optimization notes\n\nThis is not an OPT record.\n",
+        )
+        evidence = accepted.stdout + accepted.stderr
+        self.assertEqual(accepted.returncode, 0, evidence)
+        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+
+
+    def run_mandatory_section_case(
+        self, body: str
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(prefix="opt-catalog-section-content-") as temporary:
+            root = Path(temporary) / "repo"
+            root.mkdir()
+            for filename in ("README.md", "CATALOG.md", "OPTIMIZATION-PROBLEM.md"):
+                shutil.copy2(ROOT / filename, root / filename)
+            for dirname in ("scripts", "optimizations", "sources"):
+                shutil.copytree(
+                    ROOT / dirname,
+                    root / dirname,
+                    ignore=shutil.ignore_patterns("__pycache__"),
+                )
+
+            record = root / RECORD
+            text = record.read_text(encoding="utf-8")
+            start = text.index("## Validation")
+            body_start = text.index("\n", start) + 1
+            next_section = text.index("\n## ", body_start)
+            record.write_text(
+                text[:body_start] + "\n" + body.rstrip() + "\n" + text[next_section:],
+                encoding="utf-8",
+            )
+            return subprocess.run(
+                [sys.executable, "scripts/check_catalog.py"],
+                cwd=root, capture_output=True, text=True, check=False, timeout=30,
+            )
+
+    def test_literal_code_must_be_substantive_in_mandatory_sections(self) -> None:
+        for name, body in (
+            ("fenced-punctuation", "```text\n---\n```"),
+            ("indented-punctuation", "    ---"),
+        ):
+            with self.subTest(case=name):
+                rejected = self.run_mandatory_section_case(body)
+                evidence = rejected.stdout + rejected.stderr
+                self.assertEqual(rejected.returncode, 1, evidence)
+                self.assertIn(
+                    "empty/template/structural/markup-only mandatory section ## Validation",
+                    rejected.stderr,
+                )
+                self.assertNotIn("Traceback", rejected.stderr)
+
+        accepted = self.run_mandatory_section_case(
+            "```text\nvalidate output bytes\n```"
         )
         evidence = accepted.stdout + accepted.stderr
         self.assertEqual(accepted.returncode, 0, evidence)
