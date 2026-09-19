@@ -251,13 +251,18 @@ def _reference_match_is_image(match: re.Match[str]) -> bool:
 
 
 def _shortcut_reference_is_image_tail(match: re.Match[str]) -> bool:
-    """Return whether this shortcut label is the reference tail of an image."""
+    """Return whether this shortcut label is the reference tail of one image."""
     prefix = match.string[: match.start()]
-    opener = re.search(r"!\[(?:\\.|[^\]\\])+\]$", prefix)
-    return bool(
-        opener is not None
-        and not _is_backslash_escaped(match.string, opener.start())
+    blank_lines = list(
+        re.finditer(r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)", prefix)
     )
+    paragraph_start = blank_lines[-1].end() if blank_lines else 0
+    paragraph_prefix = prefix[paragraph_start:]
+    opener = re.search(r"!\[(?:\\.|[^\]\\])*\]$", paragraph_prefix)
+    if opener is None:
+        return False
+    absolute_start = paragraph_start + opener.start()
+    return not _is_backslash_escaped(match.string, absolute_start)
 
 
 def _is_indented_code_source(raw: str) -> bool:
@@ -1048,6 +1053,62 @@ def _reference_label_has_blank_line(value: str) -> bool:
     return re.search(r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)", value) is not None
 
 
+def _mask_inline_link_image_spans(
+    text: str,
+) -> tuple[str, dict[str, str]]:
+    """Protect complete inline links/images while resolving reference syntax."""
+    protected: dict[str, str] = {}
+    out: list[str] = []
+    codepoint = 0xE000
+
+    def token_for(raw: str) -> str:
+        nonlocal codepoint
+        while True:
+            token = chr(codepoint)
+            codepoint += 1
+            if token not in text and token not in protected:
+                protected[token] = raw
+                return token
+
+    index = 0
+    while index < len(text):
+        image = text.startswith("![", index)
+        if image:
+            label_open = index + 1
+        elif text[index] == "[" and not _is_backslash_escaped(text, index):
+            label_open = index
+        else:
+            out.append(text[index])
+            index += 1
+            continue
+
+        if image and _is_backslash_escaped(text, index):
+            out.append(text[index])
+            index += 1
+            continue
+
+        label_close = normalizer._find_label_close(text, label_open)
+        if (
+            label_close is None
+            or label_close + 1 >= len(text)
+            or text[label_close + 1] != "("
+        ):
+            out.append(text[index])
+            index += 1
+            continue
+
+        inline_end = normalizer._find_inline_link_end(text, label_close + 1)
+        if inline_end is None:
+            out.append(text[index])
+            index += 1
+            continue
+
+        out.append(token_for(text[index:inline_end]))
+        index = inline_end
+
+    return "".join(out), protected
+
+
 def _mask_valid_reference_definition_lines(
     text: str,
 ) -> tuple[str, dict[str, str]]:
@@ -1099,6 +1160,7 @@ def canonicalize_reference_record_links(text: str) -> str:
     """Resolve reference-style OPT links so the core validates their destinations."""
     destinations = _reference_destinations(text)
     text, protected_definitions = _mask_valid_reference_definition_lines(text)
+    text, protected_inline = _mask_inline_link_image_spans(text)
 
     def destination_for(label: str, reference: str) -> str | None:
         reference_label = reference or label
@@ -1149,6 +1211,8 @@ def canonicalize_reference_record_links(text: str) -> str:
         return match.group(0)
 
     text = SHORT_REFERENCE_RECORD_LINK_RE.sub(replace_short, text)
+    for token, raw in protected_inline.items():
+        text = text.replace(token, raw)
     text = normalizer.mask_inline_code_record_destinations(text)
     return _restore_masked_reference_definition_lines(
         text, protected_definitions
