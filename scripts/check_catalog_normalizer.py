@@ -72,7 +72,9 @@ HTML_HIDDEN_ATTR_RE = re.compile(
     r"(?=[ \t\r\n/>]|$)",
     re.IGNORECASE,
 )
-NONRENDERING_INLINE_HTML_TAGS = {"script", "style", "template", "head", "title"}
+NONRENDERING_INLINE_HTML_TAGS = {
+    "script", "style", "template", "head", "title", "iframe",
+}
 HTML_VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input",
     "link", "meta", "param", "source", "track", "wbr",
