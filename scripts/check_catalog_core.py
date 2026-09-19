@@ -1092,6 +1092,13 @@ def protect_code_spans(text: str) -> tuple[str, dict[str, str]]:
 
     i = 0
     while i < len(text):
+        if text[i] == "<" and not is_backslash_escaped(text, i):
+            html_end = inline_html_construct_end(text, i)
+            if html_end is not None:
+                out.append(text[i:html_end])
+                i = html_end
+                continue
+
         if text[i] != "`" or is_backslash_escaped(text, i):
             out.append(text[i])
             i += 1
@@ -1348,25 +1355,45 @@ def strip_inline_html_constructs(text: str) -> str:
     return "".join(out)
 
 
-def rendered_record_label(value: str) -> str:
+def normalized_code_span_text(value: str) -> str:
+    """Return the visible text of one CommonMark code-span payload."""
+    code_text = value.replace("\n", " ")
+    if (
+        len(code_text) >= 2
+        and code_text.startswith(" ")
+        and code_text.endswith(" ")
+        and code_text.strip()
+    ):
+        code_text = code_text[1:-1]
+    return code_text
+
+
+def restore_protected_code_text(
+    value: str, protected_code: dict[str, str] | None
+) -> str:
+    """Restore protected code-span payloads as literal rendered text."""
+    if not protected_code:
+        return value
+    for token, code_text in protected_code.items():
+        value = value.replace(token, normalized_code_span_text(code_text))
+    return value
+
+
+def rendered_record_label(
+    value: str, protected_code: dict[str, str] | None = None
+) -> str:
     """Render the narrow inline subset allowed for record IDs."""
     stripped = value.strip()
-    protected_text, protected = protect_code_spans(stripped)
-    if len(protected_text) == 1 and protected_text in protected:
-        code_text = protected[protected_text].replace("\n", " ")
-        if (
-            len(code_text) >= 2
-            and code_text.startswith(" ")
-            and code_text.endswith(" ")
-            and code_text.strip()
-        ):
-            code_text = code_text[1:-1]
-        return code_text
-
-    return rendered_inline_text(stripped)
+    protected_text, local_protected = protect_code_spans(stripped)
+    rendered = rendered_inline_text(protected_text)
+    rendered = restore_protected_code_text(rendered, local_protected)
+    rendered = restore_protected_code_text(rendered, protected_code)
+    return rendered.strip()
 
 
-def visible_record_links(text: str) -> list[tuple[str, str]]:
+def visible_record_links(
+    text: str, protected_code: dict[str, str] | None = None
+) -> list[tuple[str, str]]:
     """Return rendered OPT-labelled inline links with parsed destinations."""
     links: list[tuple[str, str]] = []
     i = 0
@@ -1415,7 +1442,7 @@ def visible_record_links(text: str) -> list[tuple[str, str]]:
         decoded_destination = commonmark_unescape(destination)
         rel, _separator, _fragment = decoded_destination.partition("#")
         raw_label = text[i + 1 : label_close]
-        rendered_label = rendered_record_label(raw_label)
+        rendered_label = rendered_record_label(raw_label, protected_code)
         if (
             rel.startswith("optimizations/")
             or re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None
@@ -1647,7 +1674,10 @@ def rendered_raw_html_text(value: str) -> str:
 
 
 def visible_html_record_links(
-    text: str, *, markdown_contents: bool
+    text: str,
+    *,
+    markdown_contents: bool,
+    protected_code: dict[str, str] | None = None,
 ) -> list[tuple[str, str]]:
     """Return visible HTML record links with origin-aware label rendering."""
     links: list[tuple[str, str]] = []
@@ -1685,7 +1715,9 @@ def visible_html_record_links(
         rel, _separator, _fragment = decoded_href.partition("#")
         label_source = text[tag.end():label_end]
         rendered_label = (
-            rendered_inline_text(label_source)
+            restore_protected_code_text(
+                rendered_inline_text(label_source), protected_code
+            )
             if markdown_contents
             else rendered_raw_html_text(label_source)
         )
@@ -3013,10 +3045,14 @@ for doc_name in ("README.md", "CATALOG.md"):
         None,
         honor_backslash_escapes=True,
     )
-    record_links = visible_record_links(rendered_link_scan)
+    record_links = visible_record_links(
+        rendered_link_scan, _protected_link_code
+    )
     record_links.extend(
         visible_html_record_links(
-            rendered_link_scan, markdown_contents=True
+            rendered_link_scan,
+            markdown_contents=True,
+            protected_code=_protected_link_code,
         )
     )
     raw_html_link_scan = strip_preformatted_html_scan_contents(
