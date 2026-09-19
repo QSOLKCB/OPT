@@ -1318,6 +1318,34 @@ def markdown_inputs(root: Path) -> list[Path]:
     return [path for path in paths if path.is_file()]
 
 
+def require_safe_normalization_input(path: Path, scratch: Path) -> None:
+    """Reject any selected Markdown input that traverses a symlink or scratch escape."""
+    try:
+        relative = path.relative_to(scratch)
+    except ValueError as exc:
+        raise SystemExit(
+            f"catalog-integrity: normalization input escapes scratch tree: {path}"
+        ) from exc
+
+    cursor = scratch
+    for part in relative.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise SystemExit(
+                "catalog-integrity: symlinked Markdown input is not allowed: "
+                f"{relative.as_posix()}"
+            )
+
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(scratch.resolve(strict=True))
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise SystemExit(
+            "catalog-integrity: normalization input resolves outside scratch tree: "
+            f"{relative.as_posix()}"
+        ) from exc
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="opt-catalog-integrity-") as temp_dir:
         scratch = Path(temp_dir) / "repo"
@@ -1329,6 +1357,7 @@ def main() -> int:
         )
 
         for path in markdown_inputs(scratch):
+            require_safe_normalization_input(path, scratch)
             original = path.read_text(encoding="utf-8")
             normalized = canonicalize_markdown(
                 original,
