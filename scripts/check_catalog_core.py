@@ -2468,6 +2468,11 @@ def source_text_has_direct_identity(line: str) -> bool:
     if SOURCE_DOI_RE.search(line):
         return True
     if any(
+        source_commit_has_context(line, match)
+        for match in SOURCE_COMMIT_RE.finditer(line)
+    ):
+        return True
+    if any(
         valid_repository_identity(match.group("owner"), match.group("repo"))
         for match in SOURCE_REPOSITORY_RE.finditer(line)
     ):
@@ -3076,7 +3081,7 @@ for doc_name in ("README.md", "CATALOG.md"):
         target_id = record_paths.get(rel)
         if target_id is None:
             die(f"record link in {doc_name} is not a discovered OPT record: {rel}")
-        if rendered_record_label(label) != target_id:
+        if label != target_id:
             die(
                 f"record link label mismatch in {doc_name}: '{label}' points to "
                 f"{target_id} ({rel})"
