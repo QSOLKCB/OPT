@@ -2707,11 +2707,13 @@ def source_link_destination_has_identity(
         return False
 
     local_note, _separator, _fragment = candidate.partition("#")
-    if local_note.endswith(".md") and ":" not in local_note:
+    decoded_local_note = decode_safe_repository_path_escapes(local_note)
+    if (
+        decoded_local_note is not None
+        and decoded_local_note.endswith(".md")
+        and ":" not in decoded_local_note
+    ):
         if not allow_local_note:
-            return False
-        decoded_local_note = decode_safe_repository_path_escapes(local_note)
-        if decoded_local_note is None:
             return False
         note_path = (base_dir / decoded_local_note).resolve()
         try:
@@ -2964,10 +2966,11 @@ for path in sorted(OPT_DIR.rglob("OPT-*.md")):
 
     record_title = match.group("title")
     rendered_title = rendered_inline_text(record_title).strip()
+    normalized_title = rendered_title.rstrip(" \t.!?,;:")
     if (
         not has_substantive_rendered_text(record_title)
-        or SOURCE_PLACEHOLDER_RE.fullmatch(rendered_title) is not None
-        or rendered_title.casefold() == "optimization name"
+        or SOURCE_PLACEHOLDER_RE.fullmatch(normalized_title) is not None
+        or normalized_title.casefold() == "optimization name"
     ):
         die(
             f"{path.relative_to(ROOT)} has empty/template/markup-only Optimization Name "
