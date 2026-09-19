@@ -1273,7 +1273,10 @@ def find_inline_link_end(text: str, open_paren: int) -> int | None:
     while i < len(text):
         char = text[i]
         if char == "\\" and i + 1 < len(text):
-            i += 2
+            if text[i + 1] in string.punctuation:
+                i += 2
+            else:
+                i += 1
             continue
         if char == "(":
             depth += 1
@@ -1326,7 +1329,10 @@ def inline_link_destination(text: str, open_paren: int) -> str | None:
     while i < len(text):
         char = text[i]
         if char == "\\" and i + 1 < len(text):
-            i += 2
+            if text[i + 1] in string.punctuation:
+                i += 2
+            else:
+                i += 1
             continue
         if char == "(":
             depth += 1
@@ -1593,7 +1599,9 @@ HTML_HREF_RE = re.compile(
 )
 
 
-def strip_preformatted_html_scan_contents(text: str) -> str:
+def strip_preformatted_html_scan_contents(
+    text: str, *, honor_backslash_escapes: bool = False
+) -> str:
     """Remove textarea contents from scans that look for active HTML markup."""
     out: list[str] = []
     index = 0
@@ -1608,6 +1616,10 @@ def strip_preformatted_html_scan_contents(text: str) -> str:
         if tag is None:
             out.append(text[index : tag_start + 1])
             index = tag_start + 1
+            continue
+        if honor_backslash_escapes and is_backslash_escaped(text, tag_start):
+            out.append(text[index : tag.end()])
+            index = tag.end()
             continue
 
         source = tag.group(0)
@@ -2287,7 +2299,7 @@ def reference_definition_destinations(lines: list[str]) -> dict[str, str]:
 def used_reference_links(text: str) -> list[tuple[str, str]]:
     """Return normalized reference keys paired with rendered link labels."""
     links: list[tuple[str, str]] = []
-    protected_text, _protected_code = protect_code_spans(text)
+    protected_text, protected_code = protect_code_spans(text)
     i = 0
     while i < len(protected_text):
         if protected_text[i] == "<":
@@ -2312,7 +2324,9 @@ def used_reference_links(text: str) -> list[tuple[str, str]]:
             continue
 
         label_source = protected_text[i + 1 : label_close]
-        rendered_label = rendered_inline_text(label_source)
+        rendered_label = restore_protected_code_text(
+            rendered_inline_text(label_source), protected_code
+        )
         after = label_close + 1
 
         if after < len(protected_text) and protected_text[after] == "(":
@@ -2579,9 +2593,11 @@ def source_note_has_identity(path: Path, sources_root: Path) -> bool:
         return False
 
     raw_html_source: list[str] = []
+    fenced_source: list[tuple[int, str]] = []
     visible = visible_nonfenced_lines(
         markdown_source_lines(text),
         raw_html_source=raw_html_source,
+        fenced_events=fenced_source,
     )
     hidden_reference_lines, destinations = reference_definition_scan(visible)
     rendered_visible = [
@@ -2589,6 +2605,12 @@ def source_note_has_identity(path: Path, sources_root: Path) -> bool:
         for index, raw in enumerate(visible)
         if index not in hidden_reference_lines
     ]
+    if any(
+        rendered.strip() and source_text_has_direct_identity(rendered)
+        for _source_index, rendered in fenced_source
+    ):
+        return True
+
     raw_source = "\n".join((*rendered_visible, *raw_html_source))
     source, _hidden_tag = strip_nonrendering_html_regions(
         raw_source,
@@ -2607,8 +2629,8 @@ def source_note_has_identity(path: Path, sources_root: Path) -> bool:
 
     if any(
         has_substantive_rendered_text(label)
-        and source_text_has_direct_identity(
-            commonmark_unescape_outside_code_spans(destination)
+        and source_link_destination_has_identity(
+            destination, sources_root, allow_local_note=False
         )
         for label, destination in (*html_links, *inline_links)
     ):
@@ -2620,8 +2642,8 @@ def source_note_has_identity(path: Path, sources_root: Path) -> bool:
         destination = destinations.get(reference)
         if destination is None:
             continue
-        if source_text_has_direct_identity(
-            commonmark_unescape_outside_code_spans(destination)
+        if source_link_destination_has_identity(
+            destination, sources_root, allow_local_note=False
         ):
             return True
 
@@ -2644,11 +2666,27 @@ def source_text_has_identity(line: str, sources_root: Path) -> bool:
     return False
 
 
-def source_link_destination_has_identity(value: str, sources_root: Path) -> bool:
-    """Require a parsed link destination to be a complete provenance identity."""
+def source_link_destination_has_identity(
+    value: str,
+    sources_root: Path,
+    *,
+    allow_local_note: bool = True,
+) -> bool:
+    """Require a parsed link destination to be one complete provenance identity."""
     candidate = value.strip()
     if not candidate:
         return False
+
+    local_note, _separator, _fragment = candidate.partition("#")
+    if re.fullmatch(r"sources/[A-Za-z0-9._/-]+\.md", local_note) is not None:
+        if not allow_local_note:
+            return False
+        note_path = (ROOT / local_note).resolve()
+        try:
+            note_path.relative_to(sources_root)
+        except ValueError:
+            return False
+        return note_path.is_file() and source_note_has_identity(note_path, sources_root)
 
     if valid_http_source_url(candidate):
         return True
@@ -2660,21 +2698,12 @@ def source_link_destination_has_identity(value: str, sources_root: Path) -> bool
         r"(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)",
         candidate,
     )
-    if repository is not None and valid_repository_identity(
-        repository.group("owner"), repository.group("repo")
-    ):
-        return True
-
-    local_note, _separator, _fragment = candidate.partition("#")
-    if re.fullmatch(r"sources/[A-Za-z0-9._/-]+\.md", local_note) is None:
-        return False
-
-    note_path = (ROOT / local_note).resolve()
-    try:
-        note_path.relative_to(sources_root)
-    except ValueError:
-        return False
-    return note_path.is_file() and source_note_has_identity(note_path, sources_root)
+    return bool(
+        repository is not None
+        and valid_repository_identity(
+            repository.group("owner"), repository.group("repo")
+        )
+    )
 
 
 def source_section_has_identity(
@@ -2732,8 +2761,7 @@ def source_section_has_identity(
     for label, destination in (*html_links, *inline_links):
         if not has_substantive_rendered_text(label):
             continue
-        rendered_destination = commonmark_unescape_outside_code_spans(destination)
-        if source_link_destination_has_identity(rendered_destination, sources_root):
+        if source_link_destination_has_identity(destination, sources_root):
             return True
 
     for reference, label in used_reference_links(source):
@@ -2742,8 +2770,7 @@ def source_section_has_identity(
         destination = destinations.get(reference)
         if destination is None:
             continue
-        rendered_destination = commonmark_unescape_outside_code_spans(destination)
-        if source_link_destination_has_identity(rendered_destination, sources_root):
+        if source_link_destination_has_identity(destination, sources_root):
             return True
 
     return False
@@ -3200,9 +3227,13 @@ for doc_name in ("README.md", "CATALOG.md"):
     record_links = visible_record_links(
         rendered_link_scan, _protected_link_code
     )
+    rendered_html_link_scan = strip_preformatted_html_scan_contents(
+        rendered_link_scan,
+        honor_backslash_escapes=True,
+    )
     record_links.extend(
         visible_html_record_links(
-            rendered_link_scan,
+            rendered_html_link_scan,
             markdown_contents=True,
             protected_code=_protected_link_code,
         )
