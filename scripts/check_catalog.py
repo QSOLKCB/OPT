@@ -40,7 +40,7 @@ SETEXT_LEVEL_1_OR_2_RE = re.compile(
     r"^ {0,3}(?P<marker>=+|-+)[ \t]*$"
 )
 GENERIC_SECTION_PLACEHOLDER_RE = re.compile(
-    r"^(?:[-*+]\s*)?(?:unknown|tbd|todo|n/?a|none|pending)(?:[.!?])?$",
+    r"^(?:[-*+]\s*)?(?:unknown|tbd|todo|n/?a|none|pending)[.!?,;:]*$",
     re.IGNORECASE,
 )
 STATUS_LINE_RE = re.compile(r"^(?P<prefix>\*\*Status:\*\*)[ \t]*(?P<payload>.*)$")
