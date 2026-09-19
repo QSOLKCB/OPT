@@ -375,6 +375,11 @@ class HTMLVisibilityState:
         if new_tag == "form" and self.form_pointer_active:
             return True
 
+        # Markdown raw HTML is parsed after the document body has begun; a
+        # misplaced <head> start is ignored by HTML's in-body insertion mode.
+        if new_tag == "head":
+            return True
+
         if (
             new_tag in self.TABLE_ONLY_START_TAGS
             and not self.has_html_table_context()
@@ -500,7 +505,11 @@ class HTMLVisibilityState:
 
         for index in range(len(self.elements) - 1, -1, -1):
             current_tag, _hidden, namespace = self.elements[index]
-            if namespace == "html" and current_tag == tag:
+            if current_tag == tag:
+                if namespace != "html":
+                    del self.elements[index:]
+                    self._refresh_foster_parenting()
+                    return
                 if tag == "form":
                     self.form_pointer_active = False
                     if index < len(self.elements) - 1:
@@ -867,6 +876,10 @@ def strip_nonrendering_html_regions(
             # reprocessed as a new select element.
             if tag == "select":
                 continue
+        if tag == "table" and state.table_foster_parent_index() is not None:
+            # In "in table" mode a nested table start closes the current table
+            # and is reprocessed rather than being nested beneath it.
+            state.close("table")
         if state.start_is_ignored(source):
             continue
         state.break_out_of_foreign_content(source)
@@ -1328,17 +1341,21 @@ def visible_nonfenced_lines(
         ):
             continue
 
-        if (
-            raw_for_parse
-            and not was_paragraph_open
-            and _line_keeps_paragraph_open(parse_view, False)
-        ):
+        generated_block_tag: str | None = None
+        if raw_for_parse and not was_paragraph_open:
+            heading_start = re.match(r"^ {0,3}(#{1,6})(?:[ \t]|$)", parse_view)
+            if heading_start is not None:
+                generated_block_tag = f"h{len(heading_start.group(1))}"
+            elif _line_keeps_paragraph_open(parse_view, False):
+                generated_block_tag = "p"
+
+        if generated_block_tag is not None:
             for html_state in (
                 raw_html_source_hidden_tag,
                 raw_html_hidden_tag,
             ):
                 if html_state is not None:
-                    html_state.process_generated_block_start("p")
+                    html_state.process_generated_block_start(generated_block_tag)
 
         if raw_for_parse:
             append_visible(source_index, raw_for_parse)
@@ -2272,6 +2289,8 @@ def html_anchor_links(text: str) -> list[tuple[str, str]]:
             continue
 
         href = first_html_attribute_value(tag_source, "href")
+        if href is None and html_namespace_at_offset(text, start) == "svg":
+            href = first_html_attribute_value(tag_source, "xlink:href")
         if href is None:
             index = tag.end()
             continue
@@ -2308,6 +2327,50 @@ def rendered_raw_html_text(value: str) -> str:
     text = preserve_html_image_alt_text(text)
     text = strip_inline_html_constructs(text)
     return html.unescape(text).strip()
+
+
+def html_namespace_at_offset(text: str, offset: int) -> str:
+    """Return the browser namespace active immediately before one HTML token."""
+    state = HTMLVisibilityState()
+    index = 0
+    while index < offset:
+        start = text.find("<", index, offset)
+        if start < 0:
+            break
+        token = INLINE_HTML_TAG_RE.match(text, start)
+        if token is None or token.end() > offset:
+            index = start + 1
+            continue
+        source = token.group(0)
+        index = token.end()
+        end = re.match(
+            r"</([A-Za-z][A-Za-z0-9-]*)(?:[ \t\r\n/>]|$)",
+            source,
+        )
+        if end is not None:
+            state.close(end.group(1).lower())
+            continue
+        tag = html_start_tag_name(source)
+        if tag is None:
+            continue
+        if state.in_select_mode and tag in {"input", "keygen", "textarea", "select"}:
+            state.close("select")
+            if tag == "select":
+                continue
+        if tag == "table" and state.table_foster_parent_index() is not None:
+            state.close("table")
+        if state.start_is_ignored(source):
+            continue
+        state.break_out_of_foreign_content(source)
+        state.close_for_start(source)
+        namespace = state.namespace_for_start(tag)
+        self_closing = re.search(r"/[ \t\r\n]*>$", source) is not None
+        if (
+            tag not in HTML_VOID_TAGS
+            and not (self_closing and namespace in {"svg", "math"})
+        ):
+            state.elements.append((tag, False, namespace))
+    return state.current_namespace
 
 
 def visible_html_record_links(
