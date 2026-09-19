@@ -377,6 +377,54 @@ CASES = [
             "optimizations/does-not-exist.md?x=1"
         ),
     ),
+    # Latest Codex image/HTML scan round.
+    dict(
+        id="codex-reference-image-not-source-identity",
+        expected=1,
+        source=(
+            "![diagram][ref]\n\n"
+            "[ref]: https://example.com/source"
+        ),
+        stderr_contains="## Source evidence lacks a concrete source identity",
+    ),
+    dict(
+        id="codex-reference-image-not-record-link",
+        expected=0,
+        readme=(
+            "![diagram][record-image]\n\n"
+            "[record-image]: optimizations/does-not-exist.md"
+        ),
+    ),
+    dict(
+        id="codex-recovered-hidden-end-tag",
+        expected=1,
+        readme=(
+            '<div hidden>x</div class="ignored">'
+            '<a href="optimizations/does-not-exist.md">details</a>'
+        ),
+        stderr_contains=(
+            "broken visible record link in README.md: "
+            "optimizations/does-not-exist.md"
+        ),
+    ),
+    dict(
+        id="codex-html-href-leading-whitespace",
+        expected=1,
+        readme=(
+            '<a href=" optimizations/does-not-exist.md">details</a>'
+        ),
+        stderr_contains=(
+            "broken visible record link in README.md: "
+            "optimizations/does-not-exist.md"
+        ),
+    ),
+    dict(
+        id="control-html-href-whitespace-valid-record",
+        expected=0,
+        readme=(
+            '<a href="  ' + VALID_RECORD + '  ">OPT-INC-001</a>'
+        ),
+    ),
 ]
 
 
