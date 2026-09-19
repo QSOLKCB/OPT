@@ -56,6 +56,12 @@ CASES = [
     ("xmp-following-anchor-control", '<xmp>literal</xmp><a href="' + BROKEN + '">details</a>', False),
     ("self-closing-hidden-svg", '<svg hidden/><a href="' + BROKEN + '">details</a>', False),
     ("html-self-closing-control", '<div hidden/><a href="' + BROKEN + '">details</a>', True),
+    ("plaintext-eof-literal", '<plaintext><a href="' + BROKEN + '">details</a>', True),
+    ("foreignobject-html-integration", '<svg><foreignObject><div hidden/><a href="' + BROKEN + '">details</a></foreignObject></svg>', True),
+    ("foreignobject-nested-svg-control", '<svg><foreignObject><svg hidden/><a href="' + BROKEN + '">details</a></foreignObject></svg>', False),
+    ("nested-form-start-ignored", '<form hidden>x<form></form><a href="' + BROKEN + '">details</a>', False),
+    ("single-hidden-form-control", '<form hidden>x<div></div><a href="' + BROKEN + '">details</a></form>', True),
+    ("nested-anchor-recovery", '<a hidden>hidden<a href="' + BROKEN + '">details</a>', False),
     ("backslash-path", '<a href="optimizations\\does-not-exist.md">details</a>', False),
     ("entity-backslash-path", '<a href="optimizations&#92;does-not-exist.md">details</a>', False),
     ("valid-backslash-path", '<a href="' + RECORD.replace('/', '\\') + '">OPT-INC-001</a>', True),
@@ -93,6 +99,46 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
                     else:
                         self.assertIn("broken visible record link in " + document, result.stderr)
                         self.assertNotIn("Traceback", result.stderr)
+
+    def run_source_evidence_case(self, source_evidence: str) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(prefix="opt-catalog-source-select-") as temporary:
+            root = Path(temporary) / "repo"
+            root.mkdir()
+            for name in ("README.md", "CATALOG.md", "OPTIMIZATION-PROBLEM.md"):
+                shutil.copy2(ROOT / name, root / name)
+            for name in ("scripts", "optimizations", "sources"):
+                shutil.copytree(ROOT / name, root / name, ignore=shutil.ignore_patterns("__pycache__"))
+
+            record = root / RECORD
+            text = record.read_text(encoding="utf-8")
+            start = text.index("## Source evidence")
+            body_start = text.index("\n", start) + 1
+            next_section = text.index("\n## ", body_start)
+            replacement = "\n" + source_evidence.strip() + "\n"
+            record.write_text(
+                text[:body_start] + replacement + text[next_section:],
+                encoding="utf-8",
+            )
+            return subprocess.run(
+                [sys.executable, "scripts/check_catalog.py"],
+                cwd=root, capture_output=True, text=True, check=False, timeout=30,
+            )
+
+    def test_select_ignored_anchor_cannot_supply_source_identity(self) -> None:
+        rejected = self.run_source_evidence_case(
+            '<select><a href="https://example.com/source">source</a></select>'
+        )
+        evidence = rejected.stdout + rejected.stderr
+        self.assertEqual(rejected.returncode, 1, evidence)
+        self.assertIn("## Source evidence lacks a concrete source identity", rejected.stderr)
+        self.assertNotIn("Traceback", rejected.stderr)
+
+        accepted = self.run_source_evidence_case(
+            '<a href="https://example.com/source">source</a>'
+        )
+        evidence = accepted.stdout + accepted.stderr
+        self.assertEqual(accepted.returncode, 0, evidence)
+        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
 
 
 if __name__ == "__main__":
