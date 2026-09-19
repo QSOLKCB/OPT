@@ -3007,18 +3007,16 @@ for doc_name in ("README.md", "CATALOG.md"):
         doc_visible_lines
     )
     rendered = "\n".join(doc_visible_lines)
+    rendered_code_scan, _protected_link_code = protect_code_spans(rendered)
     rendered_link_scan, _hidden_link_state = strip_nonrendering_html_regions(
-        rendered,
+        rendered_code_scan,
         None,
         honor_backslash_escapes=True,
     )
     record_links = visible_record_links(rendered_link_scan)
-    rendered_html_scan, _protected_html_code = protect_code_spans(
-        rendered_link_scan
-    )
     record_links.extend(
         visible_html_record_links(
-            rendered_html_scan, markdown_contents=True
+            rendered_link_scan, markdown_contents=True
         )
     )
     raw_html_link_scan = strip_preformatted_html_scan_contents(
