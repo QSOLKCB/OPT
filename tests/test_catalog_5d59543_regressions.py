@@ -80,6 +80,8 @@ CASES = [
     ("legacy-image-is-void-img", '<image hidden><a href="' + BROKEN + '">details</a>', False),
     ("code-span-heading-boundary", "`open\n# [OPT-FAKE-999](" + BROKEN + ")`", False),
     ("code-span-soft-line-control", "`open\n[details](" + BROKEN + ")`", True),
+    ("foreign-breakout-start", '<svg hidden><div></div><a href="' + BROKEN + '">details</a></svg>', False),
+    ("table-close-reprocessed-from-cell", '<table hidden><tr><td>x</table><a href="' + BROKEN + '">details</a>', False),
     ("non-http-scheme-control", '<a href="urn:optimizations\\does-not-exist.md">details</a>', True),
 ]
 
@@ -159,6 +161,23 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
 
         accepted = self.run_source_evidence_case(
             '<a href="https://example.com/source">source</a>'
+        )
+        evidence = accepted.stdout + accepted.stderr
+        self.assertEqual(accepted.returncode, 0, evidence)
+        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+
+
+    def test_hidden_html_ancestry_crosses_raw_block_boundaries(self) -> None:
+        rejected = self.run_source_evidence_case(
+            "<div hidden>\n\nhttps://example.com/source\n\n</div>"
+        )
+        evidence = rejected.stdout + rejected.stderr
+        self.assertEqual(rejected.returncode, 1, evidence)
+        self.assertIn("## Source evidence lacks a concrete source identity", rejected.stderr)
+        self.assertNotIn("Traceback", rejected.stderr)
+
+        accepted = self.run_source_evidence_case(
+            "<div>\n\nhttps://example.com/source\n\n</div>"
         )
         evidence = accepted.stdout + accepted.stderr
         self.assertEqual(accepted.returncode, 0, evidence)
