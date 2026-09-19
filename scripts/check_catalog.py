@@ -1058,21 +1058,74 @@ def _reference_label_has_blank_line(value: str) -> bool:
     return re.search(r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)", value) is not None
 
 
+def _starts_interrupting_block(raw: str) -> bool:
+    """Recognize block starts that can end an already-open paragraph."""
+    if not raw.strip(" \t"):
+        return True
+    # Indented continuation is still paragraph text, not an indented code block.
+    if _is_indented_code_source(raw):
+        return False
+    if re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", raw):
+        return True
+    if normalizer.THEMATIC_BREAK_RE.fullmatch(raw):
+        return True
+    if SETEXT_LEVEL_1_OR_2_RE.fullmatch(raw):
+        return True
+    if normalizer.BLOCKQUOTE_PREFIX_RE.match(raw):
+        return True
+    if re.match(r"^ {0,3}[-+*][ \t]+\S", raw):
+        return True
+    ordered = re.match(r"^ {0,3}(?P<number>\d{1,9})[.)][ \t]+\S", raw)
+    if ordered is not None and int(ordered.group("number")) == 1:
+        return True
+    fence = REFERENCE_FENCE_OPEN_RE.match(raw)
+    if fence is not None and (
+        fence.group(1)[0] != "`" or "`" not in fence.group(2)
+    ):
+        return True
+    if re.match(r"^ {0,3}<(?:!--|\?|!\[CDATA\[|![A-Z])", raw):
+        return True
+    if re.match(
+        r"^ {0,3}<(?:script|pre|style|textarea)(?:[ \t>]|$)",
+        raw,
+        re.IGNORECASE,
+    ):
+        return True
+    tag = re.match(r"^ {0,3}</?([A-Za-z][A-Za-z0-9-]*)(?:[ \t/>]|$)", raw)
+    return bool(tag and tag.group(1).lower() in normalizer.HTML_BLOCK_TAGS)
+
+
+def _inline_block_end(text: str, start: int) -> int:
+    """Bound inline parsing by blank lines and paragraph-interrupting blocks."""
+    line_start = max(text.rfind("\n", 0, start), text.rfind("\r", 0, start)) + 1
+    first_line = re.search(r"\r\n|\r|\n", text[start:])
+    if first_line is None:
+        return len(text)
+    line_end = start + first_line.start()
+    # An ATX heading owns only its own source line.
+    if re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", text[line_start:line_end]):
+        return line_end
+    for ending in re.finditer(r"\r\n|\r|\n", text[start:]):
+        following = start + ending.end()
+        next_ending = re.search(r"\r\n|\r|\n", text[following:])
+        next_end = len(text) if next_ending is None else following + next_ending.start()
+        if _starts_interrupting_block(text[following:next_end]):
+            return start + ending.start()
+    return len(text)
+
+
 def _find_label_close_in_paragraph(text: str, open_index: int) -> int | None:
-    """Find a label close without crossing a CommonMark paragraph boundary."""
-    boundary = re.search(
-        r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)",
-        text[open_index + 1 :],
-    )
-    paragraph_end = (
-        len(text)
-        if boundary is None
-        else open_index + 1 + boundary.start()
-    )
-    close = normalizer._find_label_close(text, open_index)
-    if close is None or close >= paragraph_end:
-        return None
-    return close
+    """Find a label close without consuming source from another leaf block."""
+    paragraph_end = _inline_block_end(text, open_index)
+    return normalizer._find_label_close(text[:paragraph_end], open_index)
+
+
+def _inline_link_end_in_paragraph(
+    text: str, label_open: int, open_paren: int
+) -> int | None:
+    """Only a complete same-block inline destination suppresses a reference."""
+    paragraph_end = _inline_block_end(text, label_open)
+    return normalizer._find_inline_link_end(text[:paragraph_end], open_paren)
 
 
 def _mask_inline_link_image_spans(
@@ -1119,7 +1172,7 @@ def _mask_inline_link_image_spans(
             index += 1
             continue
 
-        inline_end = normalizer._find_inline_link_end(text, label_close + 1)
+        inline_end = _inline_link_end_in_paragraph(text, label_open, label_close + 1)
         if inline_end is None:
             out.append(text[index])
             index += 1
@@ -1193,6 +1246,8 @@ def canonicalize_reference_record_links(text: str) -> str:
             return match.group(0)
         if _is_backslash_escaped(match.string, match.start()):
             return match.group(0)
+        if match.end() > _inline_block_end(match.string, match.start()):
+            return match.group(0)
         label = match.group("label")
         reference = match.group("reference")
         if (
@@ -1229,10 +1284,18 @@ def canonicalize_reference_record_links(text: str) -> str:
                 continue
 
             after = label_close + 1
-            if after < len(source) and source[after] in "[(":
-                out.append(source[index:after])
-                index = after
-                continue
+            if after < len(source) and source[after] == "(":
+                inline_end = _inline_link_end_in_paragraph(source, index, after)
+                if inline_end is not None:
+                    out.append(source[index:inline_end])
+                    index = inline_end
+                    continue
+            if after < len(source) and source[after] == "[":
+                reference_close = _find_label_close_in_paragraph(source, after)
+                if reference_close is not None:
+                    out.append(source[index:after])
+                    index = after
+                    continue
 
             original = source[index:after]
             if (
