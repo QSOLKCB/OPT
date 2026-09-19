@@ -11,7 +11,7 @@ import re
 import string
 import unicodedata
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePath
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1601,7 +1601,7 @@ HTML_ATTRIBUTE_RE = re.compile(
 
 
 def first_html_attribute_value(source: str, attribute: str) -> str | None:
-    """Return the first duplicate attribute's value, matching HTML parsing."""
+    """Return the first duplicate attribute value; valueless means empty."""
     target = attribute.casefold()
     for match in HTML_ATTRIBUTE_RE.finditer(source):
         if match.group("name").casefold() != target:
@@ -1610,7 +1610,7 @@ def first_html_attribute_value(source: str, attribute: str) -> str | None:
             value = match.group(group)
             if value is not None:
                 return value
-        return None
+        return ""
     return None
 
 
@@ -2682,6 +2682,7 @@ def source_link_destination_has_identity(
     sources_root: Path,
     *,
     allow_local_note: bool = True,
+    base_dir: Path = ROOT,
 ) -> bool:
     """Require a parsed link destination to be one complete provenance identity."""
     candidate = value.strip()
@@ -2689,10 +2690,10 @@ def source_link_destination_has_identity(
         return False
 
     local_note, _separator, _fragment = candidate.partition("#")
-    if re.fullmatch(r"sources/[A-Za-z0-9._/-]+\.md", local_note) is not None:
+    if local_note.endswith(".md") and ":" not in local_note:
         if not allow_local_note:
             return False
-        note_path = (ROOT / local_note).resolve()
+        note_path = (base_dir / local_note).resolve()
         try:
             note_path.relative_to(sources_root)
         except ValueError:
@@ -2721,6 +2722,7 @@ def source_section_has_identity(
     lines: list[str],
     document_reference_definitions: dict[str, str] | None = None,
     rendered_fenced_text: list[str] | None = None,
+    source_path: Path | None = None,
 ) -> bool:
     """Require at least one concrete, rendered provenance identity."""
     sources_root = (ROOT / "sources").resolve()
@@ -2772,7 +2774,11 @@ def source_section_has_identity(
     for label, destination in (*html_links, *inline_links):
         if not has_substantive_rendered_text(label):
             continue
-        if source_link_destination_has_identity(destination, sources_root):
+        if source_link_destination_has_identity(
+            destination,
+            sources_root,
+            base_dir=source_path.parent if source_path is not None else ROOT,
+        ):
             return True
 
     for reference, label in used_reference_links(source):
@@ -2781,7 +2787,11 @@ def source_section_has_identity(
         destination = destinations.get(reference)
         if destination is None:
             continue
-        if source_link_destination_has_identity(destination, sources_root):
+        if source_link_destination_has_identity(
+            destination,
+            sources_root,
+            base_dir=source_path.parent if source_path is not None else ROOT,
+        ):
             return True
 
     return False
@@ -3000,6 +3010,7 @@ for path in sorted(OPT_DIR.rglob("OPT-*.md")):
         source_evidence,
         status_definitions,
         rendered_fenced_text=source_fenced_text,
+        source_path=path,
     ):
         die(
             f"{path.relative_to(ROOT)} ## Source evidence lacks a concrete source identity "
@@ -3022,7 +3033,15 @@ missing_frozen = sorted(FROZEN_V1 - records.keys())
 if missing_frozen:
     die(f"frozen v1 record(s) missing: {', '.join(missing_frozen)}")
 
-record_paths = {str(path.relative_to(ROOT)): record_id for record_id, path in records.items()}
+def repository_relative_posix(path: PurePath, root: PurePath = ROOT) -> str:
+    """Return a stable repository-relative key independent of host separators."""
+    return path.relative_to(root).as_posix()
+
+
+record_paths = {
+    repository_relative_posix(path): record_id
+    for record_id, path in records.items()
+}
 
 
 
