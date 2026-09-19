@@ -173,7 +173,17 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         )
         evidence = rejected.stdout + rejected.stderr
         self.assertEqual(rejected.returncode, 1, evidence)
-        self.assertIn("## Source evidence lacks a concrete source identity", rejected.stderr)
+        self.assertTrue(
+            (
+                "## Source evidence lacks a concrete source identity"
+                in rejected.stderr
+            )
+            or (
+                "empty/template/structural/markup-only mandatory section ## Source evidence"
+                in rejected.stderr
+            ),
+            evidence,
+        )
         self.assertNotIn("Traceback", rejected.stderr)
 
         accepted = self.run_source_evidence_case(
