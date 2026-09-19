@@ -155,6 +155,48 @@ CASES = [
         expected=0,
         readme=r"[example](notes/foo\(bar\).md)",
     ),
+    # Codex follow-up: HTML keeps the first duplicate attribute, even if valueless.
+    dict(
+        id="codex-valueless-first-href",
+        expected=1,
+        source='<a href href="https://example.com/source">source</a>',
+        stderr_contains="## Source evidence lacks a concrete source identity",
+    ),
+    dict(
+        id="control-valued-first-href",
+        expected=0,
+        source='<a href="https://example.com/source" href>source</a>',
+    ),
+    dict(
+        id="control-empty-first-href",
+        expected=1,
+        source='<a href="" href="https://example.com/source">source</a>',
+        stderr_contains="## Source evidence lacks a concrete source identity",
+    ),
+    # Placeholder-only mandatory sections remain empty after ordinary punctuation.
+    dict(
+        id="codex-punctuated-placeholder",
+        expected=1,
+        validation="TODO;",
+        stderr_contains=(
+            "empty/template/structural/markup-only mandatory section ## Validation"
+        ),
+    ),
+    dict(
+        id="control-placeholder-with-substance",
+        expected=0,
+        validation="TODO; replace the temporary benchmark before release.",
+    ),
+    # Nested OPT-shaped Markdown must enter the same record/schema gate.
+    dict(
+        id="codex-nested-record",
+        expected=1,
+        nested_record=(
+            "# OPT-NEW-999 — Nested unvalidated record\n\n"
+            "**Status:** Source candidate\n"
+        ),
+        stderr_contains="missing visible sections",
+    ),
 ]
 
 
@@ -195,6 +237,31 @@ class CatalogPublicEntrypointTests(unittest.TestCase):
             if isinstance(note, str):
                 (root / "sources" / "AUDIT-NOTE.md").write_text(
                     note + "\n", encoding="utf-8"
+                )
+
+            validation = case.get("validation")
+            if isinstance(validation, str):
+                record_path = root / RECORD
+                before, rest = record_path.read_text(encoding="utf-8").split(
+                    "## Validation", 1
+                )
+                _old_validation, after = rest.split("## Target-repo adaptation", 1)
+                record_path.write_text(
+                    before
+                    + "## Validation\n\n"
+                    + validation
+                    + "\n\n## Target-repo adaptation"
+                    + after,
+                    encoding="utf-8",
+                )
+
+            nested_record = case.get("nested_record")
+            if isinstance(nested_record, str):
+                nested_dir = root / "optimizations" / "incubator"
+                nested_dir.mkdir(parents=True, exist_ok=True)
+                (nested_dir / "OPT-NEW-999-unvalidated.md").write_text(
+                    nested_record,
+                    encoding="utf-8",
                 )
 
             readme = case.get("readme")
