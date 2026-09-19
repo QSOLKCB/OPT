@@ -11,6 +11,19 @@ import check_catalog_core as core  # noqa: E402
 
 
 class CatalogCommonMarkRegressionTests(unittest.TestCase):
+    def test_html_url_backslashes_only_normalize_http_path(self) -> None:
+        for source, expected in (
+            (r"optimizations\record.md?q=\value#\fragment",
+             r"optimizations/record.md?q=\value#\fragment"),
+            (r"HTTPS:\\example.com\record.md", "HTTPS://example.com/record.md"),
+            (r"urn:optimizations\record.md", r"urn:optimizations\record.md"),
+            (r"optimizations&#92;record.md", "optimizations/record.md"),
+            (r"optimizations&amp;#92;record.md", "optimizations&#92;record.md"),
+            (r"optimizations%5Crecord.md", r"optimizations%5Crecord.md"),
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(core.decoded_html_url_attribute(source), expected)
+
     def test_fenced_source_identity_counts_as_visible_literal_content(self) -> None:
         url = "https://github.com/QSOLKCB/OPT/commit/0123456789abcdef0123456789abcdef01234567"
         document = f"""# OPT-TEST-001 — Example
