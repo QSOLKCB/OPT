@@ -146,7 +146,7 @@ INLINE_HTML_TAG_RE = re.compile(
     r"[ \t\r\n]*/?>"
 )
 HTML_RECOVERED_START_TAG_RE = re.compile(
-    r"<[A-Za-z][A-Za-z0-9-]*/[ \t\r\n]+"
+    r"<[A-Za-z][A-Za-z0-9-]*[ \t\r\n]*/[ \t\r\n]+"
     r"(?:[A-Za-z_:][A-Za-z0-9_.:-]*"
     r"(?:[ \t\r\n]*=[ \t\r\n]*(?:\"[^\"]*\"|'[^']*'|[^ \t\r\n\"'=<>\x60]+))?"
     r"(?:[ \t\r\n]+|(?=>)))*"
@@ -282,6 +282,14 @@ class HTMLVisibilityState:
     def begin_foster_parenting(self) -> None:
         table_index = self.table_foster_parent_index()
         if table_index is None:
+            return
+        # Preserve the earliest foster-parented element for this table. Nested
+        # foster-parented descendants belong beneath that already relocated
+        # ancestor; moving the boundary forward would lose its hidden state.
+        if (
+            self.foster_table_index == table_index
+            and self.foster_start_index is not None
+        ):
             return
         self.foster_table_index = table_index
         self.foster_start_index = len(self.elements)
@@ -2119,7 +2127,11 @@ def visible_html_record_links(
         anchor_start = (
             re.match(r"<a(?:[ \t\r\n]|>)", tag_source, re.IGNORECASE)
             if not recovered
-            else re.match(r"<a/[ \t\r\n]+", tag_source, re.IGNORECASE)
+            else re.match(
+                r"<a[ \t\r\n]*/[ \t\r\n]+",
+                tag_source,
+                re.IGNORECASE,
+            )
         )
         if anchor_start is None:
             index = tag.end()
@@ -2737,9 +2749,11 @@ def section_has_content(lines: list[str]) -> bool:
 
 
 def fenced_rendered_text_has_content(lines: list[str]) -> bool:
-    """Treat fenced-code bodies as visible literal content, not Markdown structure."""
+    """Require substantive literal text in fenced or indented code bodies."""
     return any(
-        line.strip() and line.strip() not in TEMPLATE_PLACEHOLDER_LINES
+        line.strip()
+        and line.strip() not in TEMPLATE_PLACEHOLDER_LINES
+        and has_substantive_rendered_text(line)
         for line in lines
     )
 
