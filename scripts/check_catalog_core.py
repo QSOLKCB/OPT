@@ -6,6 +6,7 @@ from __future__ import annotations
 import html
 import ipaddress
 from html.entities import html5 as HTML5_ENTITIES
+import posixpath
 import re
 import string
 import unicodedata
@@ -129,7 +130,8 @@ SOURCE_REPOSITORY_PLACEHOLDERS = {
     "pending",
 }
 SOURCE_PLACEHOLDER_RE = re.compile(
-    r"^(?:[-*+]\s*)?(?:unknown|tbd|todo|n/?a|none|pending)\.?$", re.IGNORECASE
+    r"^(?:[-*+]\s*)?(?:unknown|tbd|todo|n/?a|none|pending)(?:[.!?])?$",
+    re.IGNORECASE,
 )
 REFERENCE_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\[[^\]]*\]")
 REFERENCE_LINK_RE = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
@@ -144,7 +146,7 @@ INLINE_HTML_TAG_RE = re.compile(
     r"[ \t\r\n]*/?>"
 )
 NONRENDERING_HTML_OPEN_RE = re.compile(
-    r"<(?P<tag>script|style|template|head|title)(?:[ \t\r\n/>]|$)",
+    r"<(?P<tag>script|style|template|head|title|iframe)(?:[ \t\r\n/>]|$)",
     re.IGNORECASE,
 )
 HTML_HIDDEN_ATTR_RE = re.compile(
@@ -153,7 +155,9 @@ HTML_HIDDEN_ATTR_RE = re.compile(
     r"(?=[ \t\r\n/>]|$)",
     re.IGNORECASE,
 )
-NONRENDERING_HTML_TAGS = {"script", "style", "template", "head", "title"}
+NONRENDERING_HTML_TAGS = {
+    "script", "style", "template", "head", "title", "iframe",
+}
 HTML_VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input",
     "link", "meta", "param", "source", "track", "wbr",
@@ -1402,6 +1406,16 @@ def rendered_record_label(
     return rendered.strip()
 
 
+def normalize_repository_relative_path(path: str) -> str | None:
+    """Normalize a repository-relative POSIX path without allowing root escape."""
+    if not path or path.startswith("/"):
+        return None
+    normalized = posixpath.normpath(path)
+    if normalized in {"", "."} or normalized == ".." or normalized.startswith("../"):
+        return None
+    return normalized
+
+
 def visible_record_links(
     text: str, protected_code: dict[str, str] | None = None
 ) -> list[tuple[str, str]]:
@@ -1457,9 +1471,13 @@ def visible_record_links(
 
         decoded_destination = commonmark_unescape(destination)
         rel, _separator, _fragment = decoded_destination.partition("#")
+        normalized_rel = normalize_repository_relative_path(rel)
         rendered_label = rendered_record_label(raw_label, protected_code)
         if (
-            rel.startswith("optimizations/")
+            (
+                normalized_rel is not None
+                and normalized_rel.startswith("optimizations/")
+            )
             or re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None
         ):
             links.append((rendered_label, decoded_destination))
@@ -1627,7 +1645,7 @@ def html_anchor_label_extent(
 
         cursor = tag.end()
 
-    return None
+    return len(text), len(text)
 
 
 def html_anchor_links(text: str) -> list[tuple[str, str]]:
@@ -1706,6 +1724,9 @@ def visible_html_record_links(
         if tag is None:
             index = start + 1
             continue
+        if markdown_contents and is_backslash_escaped(text, start):
+            index = tag.end()
+            continue
 
         tag_source = tag.group(0)
         if re.match(r"<a(?:[ \t\r\n]|>)", tag_source, re.IGNORECASE) is None:
@@ -1728,6 +1749,7 @@ def visible_html_record_links(
 
         decoded_href = decode_html_attribute_references(href)
         rel, _separator, _fragment = decoded_href.partition("#")
+        normalized_rel = normalize_repository_relative_path(rel)
         label_source = text[tag.end():label_end]
         rendered_label = (
             restore_protected_code_text(
@@ -1737,7 +1759,10 @@ def visible_html_record_links(
             else rendered_raw_html_text(label_source)
         )
         if (
-            rel.startswith("optimizations/")
+            (
+                normalized_rel is not None
+                and normalized_rel.startswith("optimizations/")
+            )
             or re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None
         ):
             links.append((rendered_label, decoded_href))
@@ -2779,9 +2804,13 @@ for path in sorted(OPT_DIR.glob("*.md")):
         continue
 
     record_title = match.group("title")
-    if not has_substantive_rendered_text(record_title):
+    rendered_title = rendered_inline_text(record_title).strip()
+    if (
+        not has_substantive_rendered_text(record_title)
+        or SOURCE_PLACEHOLDER_RE.fullmatch(rendered_title) is not None
+    ):
         die(
-            f"{path.relative_to(ROOT)} has empty/markup-only Optimization Name "
+            f"{path.relative_to(ROOT)} has empty/template/markup-only Optimization Name "
             f"in its record heading"
         )
 
@@ -3085,11 +3114,17 @@ for doc_name in ("README.md", "CATALOG.md"):
     )
     for label, destination in record_links:
         rel, separator, fragment = destination.partition("#")
-        if not rel.startswith("optimizations/") or not rel.endswith(".md"):
+        normalized_rel = normalize_repository_relative_path(rel)
+        if (
+            normalized_rel is None
+            or not normalized_rel.startswith("optimizations/")
+            or not normalized_rel.endswith(".md")
+        ):
             die(
                 f"visible record link in {doc_name} has invalid destination: "
                 f"{destination}"
             )
+        rel = normalized_rel
         target = ROOT / rel
         if not target.is_file():
             die(f"broken visible record link in {doc_name}: {rel}")
