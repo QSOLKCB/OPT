@@ -250,6 +250,16 @@ def _reference_match_is_image(match: re.Match[str]) -> bool:
     )
 
 
+def _shortcut_reference_is_image_tail(match: re.Match[str]) -> bool:
+    """Return whether this shortcut label is the reference tail of an image."""
+    prefix = match.string[: match.start()]
+    opener = re.search(r"!\[(?:\\.|[^\]\\])+\]$", prefix)
+    return bool(
+        opener is not None
+        and not _is_backslash_escaped(match.string, opener.start())
+    )
+
+
 def _is_indented_code_source(raw: str) -> bool:
     columns = 0
     for char in raw:
@@ -1120,7 +1130,7 @@ def canonicalize_reference_record_links(text: str) -> str:
     text = REFERENCE_RECORD_LINK_RE.sub(replace_full, text)
 
     def replace_short(match: re.Match[str]) -> str:
-        if _reference_match_is_image(match):
+        if _reference_match_is_image(match) or _shortcut_reference_is_image_tail(match):
             return match.group(0)
         if _is_backslash_escaped(match.string, match.start()):
             return match.group(0)
