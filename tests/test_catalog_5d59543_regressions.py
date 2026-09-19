@@ -82,6 +82,12 @@ CASES = [
     ("code-span-soft-line-control", "`open\n[details](" + BROKEN + ")`", True),
     ("foreign-breakout-start", '<svg hidden><div></div><a href="' + BROKEN + '">details</a></svg>', False),
     ("table-close-reprocessed-from-cell", '<table hidden><tr><td>x</table><a href="' + BROKEN + '">details</a>', False),
+    ("svg-mtext-is-not-mathml-integration", '<svg hidden><mtext><div></div><a href="' + BROKEN + '">details</a></mtext></svg>', False),
+    ("generated-paragraph-closes-hidden-p", '<p hidden>\n\n[details](' + BROKEN + ')', False),
+    ("table-mode-form-not-ancestry", '<table><form hidden><tr><td><a href="' + BROKEN + '">details</a></td></tr></table>', False),
+    ("nested-nobr-recovery", '<nobr hidden>x<nobr></nobr><a href="' + BROKEN + '">details</a>', False),
+    ("foreign-cdata-is-text", '<svg><![CDATA[<a href="' + BROKEN + '">details</a>]]></svg>', True),
+    ("table-only-tr-ignored-in-body", '<div><tr hidden><a href="' + BROKEN + '">details</a></div>', False),
     ("non-http-scheme-control", '<a href="urn:optimizations\\does-not-exist.md">details</a>', True),
 ]
 
@@ -242,6 +248,51 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
             "NOTES.md",
             "# Optimization notes\n\nThis is not an OPT record.\n",
         )
+        evidence = accepted.stdout + accepted.stderr
+        self.assertEqual(accepted.returncode, 0, evidence)
+        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+
+
+    def run_status_visibility_case(
+        self, wrapper_start: str, wrapper_end: str
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(prefix="opt-catalog-hidden-status-") as temporary:
+            root = Path(temporary) / "repo"
+            root.mkdir()
+            for filename in ("README.md", "CATALOG.md", "OPTIMIZATION-PROBLEM.md"):
+                shutil.copy2(ROOT / filename, root / filename)
+            for dirname in ("scripts", "optimizations", "sources"):
+                shutil.copytree(
+                    ROOT / dirname,
+                    root / dirname,
+                    ignore=shutil.ignore_patterns("__pycache__"),
+                )
+
+            record = root / RECORD
+            text = record.read_text(encoding="utf-8")
+            status_start = text.index("**Status:**")
+            status_end = text.index("\n", status_start)
+            status_line = text[status_start:status_end]
+            replacement = (
+                wrapper_start + "\n\n" + status_line + "\n\n" + wrapper_end
+            )
+            record.write_text(
+                text[:status_start] + replacement + text[status_end:],
+                encoding="utf-8",
+            )
+            return subprocess.run(
+                [sys.executable, "scripts/check_catalog.py"],
+                cwd=root, capture_output=True, text=True, check=False, timeout=30,
+            )
+
+    def test_hidden_status_cannot_satisfy_schema_without_raw_collectors(self) -> None:
+        rejected = self.run_status_visibility_case("<div hidden>", "</div>")
+        evidence = rejected.stdout + rejected.stderr
+        self.assertEqual(rejected.returncode, 1, evidence)
+        self.assertIn("must contain exactly one visible Status line", rejected.stderr)
+        self.assertNotIn("Traceback", rejected.stderr)
+
+        accepted = self.run_status_visibility_case("<div>", "</div>")
         evidence = accepted.stdout + accepted.stderr
         self.assertEqual(accepted.returncode, 0, evidence)
         self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
