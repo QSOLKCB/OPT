@@ -518,25 +518,56 @@ def strip_nonrendering_html_regions(
     return "".join(out), hidden_state
 
 
-def textarea_literal_content(
+def textarea_literal_parts(
     value: str, *, opening_line: bool
-) -> str:
-    """Return textarea raw-text content with literal angle brackets protected."""
+) -> tuple[str, str, bool]:
+    """Return textarea literal body, following raw HTML, and recovered-close state."""
     source = value
+    body_start = 0
     if opening_line:
         start = source.lower().find("<textarea")
         if start < 0:
-            return ""
+            return "", "", False
         opener = INLINE_HTML_TAG_RE.match(source, start)
         if opener is None:
-            return ""
-        source = source[opener.end() :]
+            return "", "", False
+        body_start = opener.end()
 
-    close = re.search(r"</textarea[ \t\r\n]*>", source, re.IGNORECASE)
-    if close is not None:
-        source = source[: close.start()]
+    cursor = body_start
+    while cursor < len(source):
+        tag_start = source.find("<", cursor)
+        if tag_start < 0:
+            literal = source[body_start:]
+            return (
+                literal.replace("<", "&lt;").replace(">", "&gt;"),
+                "",
+                False,
+            )
 
-    return source.replace("<", "&lt;").replace(">", "&gt;")
+        tag = INLINE_HTML_TAG_RE.match(source, tag_start)
+        if tag is None:
+            cursor = tag_start + 1
+            continue
+
+        tag_source = tag.group(0)
+        if re.match(r"</textarea(?:[ \t\r\n/>]|$)", tag_source, re.IGNORECASE):
+            literal = source[body_start:tag_start]
+            return (
+                literal.replace("<", "&lt;").replace(">", "&gt;"),
+                source[tag.end() :],
+                True,
+            )
+        cursor = tag.end()
+
+    literal = source[body_start:]
+    return literal.replace("<", "&lt;").replace(">", "&gt;"), "", False
+
+
+def textarea_literal_content(
+    value: str, *, opening_line: bool
+) -> str:
+    """Compatibility wrapper returning only rendered textarea literal content."""
+    return textarea_literal_parts(value, opening_line=opening_line)[0]
 
 
 def render_raw_html_text_node(value: str) -> str:
@@ -596,6 +627,7 @@ def visible_nonfenced_lines(
     html_end: str | None = None
     html_quote_depth = 0
     html_list_indent = 0
+    html_textarea_open = False
     raw_html_comment = False
     raw_html_source_comment = False
     raw_html_hidden_tag: tuple[str, int] | None = None
@@ -719,17 +751,29 @@ def visible_nonfenced_lines(
                     else block_raw
                 )
                 if html_mode == "tag" and html_end == "textarea":
-                    literal = textarea_literal_content(
-                        html_view, opening_line=False
-                    )
-                    if raw_html_source is not None or raw_html_source_events is not None:
-                        append_raw_html_source(
-                            source_index, literal, literal=True
+                    if html_textarea_open:
+                        literal, remainder, recovered_close = textarea_literal_parts(
+                            html_view, opening_line=False
                         )
-                    if raw_html_text is not None or raw_html_events is not None:
-                        append_raw_html_text(
-                            source_index, literal, literal=True
-                        )
+                        if raw_html_source is not None or raw_html_source_events is not None:
+                            append_raw_html_source(
+                                source_index, literal, literal=True
+                            )
+                            if remainder:
+                                append_raw_html_source(source_index, remainder)
+                        if raw_html_text is not None or raw_html_events is not None:
+                            append_raw_html_text(
+                                source_index, literal, literal=True
+                            )
+                            if remainder:
+                                append_raw_html_text(source_index, remainder)
+                        if recovered_close:
+                            html_textarea_open = False
+                    else:
+                        if raw_html_source is not None or raw_html_source_events is not None:
+                            append_raw_html_source(source_index, html_view)
+                        if raw_html_text is not None or raw_html_events is not None:
+                            append_raw_html_text(source_index, html_view)
                 elif html_mode == "tag" and html_end == "pre":
                     if raw_html_source is not None or raw_html_source_events is not None:
                         append_raw_html_source(source_index, html_view)
@@ -827,18 +871,27 @@ def visible_nonfenced_lines(
                     html_mode, html_end = html_start
                     html_quote_depth = quote_depth
                     html_list_indent = current_list_indent or 0
+                    html_textarea_open = (
+                        html_mode == "tag" and html_end == "textarea"
+                    )
                     if html_mode == "tag" and html_end == "textarea":
-                        literal = textarea_literal_content(
+                        literal, remainder, recovered_close = textarea_literal_parts(
                             block_view, opening_line=True
                         )
                         if raw_html_source is not None or raw_html_source_events is not None:
                             append_raw_html_source(
                                 source_index, literal, literal=True
                             )
+                            if remainder:
+                                append_raw_html_source(source_index, remainder)
                         if raw_html_text is not None or raw_html_events is not None:
                             append_raw_html_text(
                                 source_index, literal, literal=True
                             )
+                            if remainder:
+                                append_raw_html_text(source_index, remainder)
+                        if recovered_close:
+                            html_textarea_open = False
                     else:
                         if (raw_html_source is not None or raw_html_source_events is not None) and (
                             html_mode == "blank"
@@ -1630,7 +1683,10 @@ def first_html_attribute_value(source: str, attribute: str) -> str | None:
 
 
 def strip_preformatted_html_scan_contents(
-    text: str, *, honor_backslash_escapes: bool = False
+    text: str,
+    *,
+    honor_backslash_escapes: bool = False,
+    recover_end_tags: bool = False,
 ) -> str:
     """Remove textarea contents from scans that look for active HTML markup."""
     out: list[str] = []
@@ -1681,11 +1737,20 @@ def strip_preformatted_html_scan_contents(
                 continue
 
             candidate_source = candidate.group(0)
-            if re.fullmatch(
-                rf"</{re.escape(raw_tag)}[ \t\r\n]*>",
-                candidate_source,
-                re.IGNORECASE,
-            ):
+            closes = (
+                re.match(
+                    rf"</{re.escape(raw_tag)}(?:[ \t\r\n/>]|$)",
+                    candidate_source,
+                    re.IGNORECASE,
+                )
+                if recover_end_tags
+                else re.fullmatch(
+                    rf"</{re.escape(raw_tag)}[ \t\r\n]*>",
+                    candidate_source,
+                    re.IGNORECASE,
+                )
+            )
+            if closes is not None:
                 out.append(candidate_source)
                 index = candidate.end()
                 closed = True
@@ -1734,8 +1799,9 @@ ASCII_URL_EDGE_CHARS = "".join(chr(value) for value in range(0x21))
 
 
 def decoded_html_url_attribute(value: str) -> str:
-    """Decode an HTML URL attribute and trim leading/trailing C0 controls/space."""
-    return decode_html_attribute_references(value).strip(ASCII_URL_EDGE_CHARS)
+    """Apply HTML attribute decoding plus URL preprocessing used for classification."""
+    decoded = decode_html_attribute_references(value).strip(ASCII_URL_EDGE_CHARS)
+    return decoded.replace("\t", "").replace("\r", "").replace("\n", "")
 
 
 def html_anchor_links(text: str) -> list[tuple[str, str]]:
@@ -2401,12 +2467,14 @@ def used_reference_labels(text: str) -> set[str]:
     return {reference for reference, _label in used_reference_links(text)}
 
 
-def is_structural_only_line(line: str) -> bool:
+def is_structural_only_line(
+    line: str, *, reference_definition: bool = True
+) -> bool:
     if HEADING_RE.match(line) or THEMATIC_BREAK_RE.fullmatch(line):
         return True
     if LIST_MARKER_ONLY_RE.fullmatch(line) or line == ">":
         return True
-    if LINK_REFERENCE_DEFINITION_RE.fullmatch(line):
+    if reference_definition and LINK_REFERENCE_DEFINITION_RE.fullmatch(line):
         return True
     cells = markdown_table_cells(line)
     return bool(cells and all(TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in cells))
@@ -2421,7 +2489,9 @@ def section_has_content(lines: list[str]) -> bool:
         line = raw.strip()
         if not line or line in TEMPLATE_PLACEHOLDER_LINES:
             continue
-        if EMPTY_LABEL_RE.match(line) or is_structural_only_line(line):
+        if EMPTY_LABEL_RE.match(line) or is_structural_only_line(
+            line, reference_definition=False
+        ):
             continue
         if not has_substantive_rendered_text(line):
             continue
@@ -3285,7 +3355,8 @@ for doc_name in ("README.md", "CATALOG.md"):
         )
     )
     raw_html_link_scan = strip_preformatted_html_scan_contents(
-        "\n".join(raw_html_source)
+        "\n".join(raw_html_source),
+        recover_end_tags=True,
     )
     record_links.extend(
         visible_html_record_links(
