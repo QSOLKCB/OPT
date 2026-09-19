@@ -121,7 +121,7 @@ REQUIRED_FIELD_RE = re.compile(
     + r"):[ \t]*)(?P<value>.*)$"
 )
 GENERIC_PLACEHOLDER_RE = re.compile(
-    r"^(?:unknown|tbd|todo|n/?a|none|pending)(?:[.!?])?$", re.IGNORECASE
+    r"^(?:unknown|tbd|todo|n/?a|none|pending)[.!?,;:]*$", re.IGNORECASE
 )
 HEX_TOKEN_RE = re.compile(r"\b[0-9a-fA-F]{7,40}\b")
 EXPLICIT_COMMIT_CONTEXT_RE = re.compile(
@@ -1241,7 +1241,8 @@ def canonicalize_classification_placeholders(text: str) -> str:
         field = match.group("field")
         value = match.group("value")
         rendered = _render_placeholder_with_following_lines(lines, index, value)
-        if rendered == CLASSIFICATION_TEMPLATE_VALUES[field]:
+        normalized_rendered = rendered.rstrip(" \t.!?,;:")
+        if normalized_rendered == CLASSIFICATION_TEMPLATE_VALUES[field]:
             out.append(match.group("prefix") + CLASSIFICATION_TEMPLATE_VALUES[field] + ending)
         else:
             out.append(raw)
