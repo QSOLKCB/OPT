@@ -577,6 +577,7 @@ def visible_nonfenced_lines(
     raw_html_events: list[tuple[int, str]] | None = None,
     raw_html_source_events: list[tuple[int, str]] | None = None,
     fenced_events: list[tuple[int, str]] | None = None,
+    indented_code_events: list[tuple[int, str]] | None = None,
 ) -> list[str]:
     """Return Markdown-visible lines used by schema validation.
 
@@ -800,6 +801,9 @@ def visible_nonfenced_lines(
         else:
             if is_indented_code_line(block_view):
                 if not paragraph_open:
+                    if indented_code_events is not None:
+                        literal = strip_indent_columns(block_view, 4)
+                        indented_code_events.append((source_index, literal))
                     continue
                 raw_for_parse = raw
             else:
@@ -988,6 +992,7 @@ def section_lines(
     include_raw_html_text: bool = False,
     include_raw_html_source: bool = False,
     rendered_fenced_text: list[str] | None = None,
+    rendered_indented_text: list[str] | None = None,
 ) -> list[str]:
     """Return one exact rendered level-2 Markdown section."""
     source_lines = markdown_source_lines(text)
@@ -995,6 +1000,7 @@ def section_lines(
     raw_html_events: list[tuple[int, str]] = []
     raw_html_source_events: list[tuple[int, str]] = []
     fenced_events: list[tuple[int, str]] = []
+    indented_code_events: list[tuple[int, str]] = []
     visible_nonfenced_lines(
         source_lines,
         visible_events=visible_events,
@@ -1003,6 +1009,9 @@ def section_lines(
             raw_html_source_events if include_raw_html_source else None
         ),
         fenced_events=fenced_events if rendered_fenced_text is not None else None,
+        indented_code_events=(
+            indented_code_events if rendered_indented_text is not None else None
+        ),
     )
 
     visible_values = [line for _source_index, line in visible_events]
@@ -1057,6 +1066,12 @@ def section_lines(
         rendered_fenced_text.extend(
             rendered
             for source_index, rendered in fenced_events
+            if start_source < source_index < end_source
+        )
+    if rendered_indented_text is not None:
+        rendered_indented_text.extend(
+            rendered
+            for source_index, rendered in indented_code_events
             if start_source < source_index < end_source
         )
     return section
@@ -2605,10 +2620,12 @@ def source_note_has_identity(path: Path, sources_root: Path) -> bool:
 
     raw_html_source: list[str] = []
     fenced_source: list[tuple[int, str]] = []
+    indented_source: list[tuple[int, str]] = []
     visible = visible_nonfenced_lines(
         markdown_source_lines(text),
         raw_html_source=raw_html_source,
         fenced_events=fenced_source,
+        indented_code_events=indented_source,
     )
     hidden_reference_lines, destinations = reference_definition_scan(visible)
     rendered_visible = [
@@ -2618,7 +2635,7 @@ def source_note_has_identity(path: Path, sources_root: Path) -> bool:
     ]
     if any(
         rendered.strip() and source_text_has_direct_identity(rendered)
-        for _source_index, rendered in fenced_source
+        for _source_index, rendered in (*fenced_source, *indented_source)
     ):
         return True
 
@@ -2693,7 +2710,10 @@ def source_link_destination_has_identity(
     if local_note.endswith(".md") and ":" not in local_note:
         if not allow_local_note:
             return False
-        note_path = (base_dir / local_note).resolve()
+        decoded_local_note = decode_safe_repository_path_escapes(local_note)
+        if decoded_local_note is None:
+            return False
+        note_path = (base_dir / decoded_local_note).resolve()
         try:
             note_path.relative_to(sources_root)
         except ValueError:
@@ -2895,11 +2915,11 @@ def require_prefixed_fields(
                 f"{field} in {section}: '{value}'"
             )
         if rejected_values is not None:
-            normalized_value = rendered_inline_text(value).rstrip(" \t.!?")
+            normalized_value = rendered_inline_text(value).rstrip(" \t.!?,;:")
             rejected_value = rejected_values.get(field)
             if (
                 rejected_value is not None
-                and normalized_value == rejected_value.rstrip(" \t.!?")
+                and normalized_value == rejected_value.rstrip(" \t.!?,;:")
             ):
                 die(
                     f"{path.relative_to(ROOT)} has unselected template placeholder "
@@ -2947,6 +2967,7 @@ for path in sorted(OPT_DIR.rglob("OPT-*.md")):
     if (
         not has_substantive_rendered_text(record_title)
         or SOURCE_PLACEHOLDER_RE.fullmatch(rendered_title) is not None
+        or rendered_title.casefold() == "optimization name"
     ):
         die(
             f"{path.relative_to(ROOT)} has empty/template/markup-only Optimization Name "
@@ -2985,31 +3006,36 @@ for path in sorted(OPT_DIR.rglob("OPT-*.md")):
 
     for heading in sorted(REQUIRED_V2):
         rendered_fenced_text: list[str] = []
+        rendered_indented_text: list[str] = []
         section = section_lines(
             text,
             heading,
             include_raw_html_text=True,
             rendered_fenced_text=rendered_fenced_text,
+            rendered_indented_text=rendered_indented_text,
         )
         if not (
             section_has_content(section)
             or fenced_rendered_text_has_content(rendered_fenced_text)
+            or fenced_rendered_text_has_content(rendered_indented_text)
         ):
             die(
                 f"{path.relative_to(ROOT)} has empty/template/structural/markup-only mandatory section {heading}"
             )
 
     source_fenced_text: list[str] = []
+    source_indented_text: list[str] = []
     source_evidence = section_lines(
         text,
         "## Source evidence",
         include_raw_html_source=True,
         rendered_fenced_text=source_fenced_text,
+        rendered_indented_text=source_indented_text,
     )
     if not source_section_has_identity(
         source_evidence,
         status_definitions,
-        rendered_fenced_text=source_fenced_text,
+        rendered_fenced_text=(*source_fenced_text, *source_indented_text),
         source_path=path,
     ):
         die(
