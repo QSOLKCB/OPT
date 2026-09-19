@@ -1058,40 +1058,53 @@ def _reference_label_has_blank_line(value: str) -> bool:
     return re.search(r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)", value) is not None
 
 
-def _starts_interrupting_block(raw: str) -> bool:
+def _starts_interrupting_block(
+    raw: str, *, container_indent: int = 0
+) -> bool:
     """Recognize block starts that can end an already-open paragraph."""
-    if not raw.strip(" \t"):
+    candidate = (
+        _strip_indent_columns(raw, container_indent)
+        if container_indent
+        else raw
+    )
+    if not candidate.strip(" \t"):
         return True
-    # Indented continuation is still paragraph text, not an indented code block.
-    if _is_indented_code_source(raw):
+    # Indented continuation is still paragraph text only after active
+    # container indentation has been removed.
+    if _is_indented_code_source(candidate):
         return False
-    if re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", raw):
+    if re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", candidate):
         return True
-    if normalizer.THEMATIC_BREAK_RE.fullmatch(raw):
+    if normalizer.THEMATIC_BREAK_RE.fullmatch(candidate):
         return True
-    if SETEXT_LEVEL_1_OR_2_RE.fullmatch(raw):
+    if SETEXT_LEVEL_1_OR_2_RE.fullmatch(candidate):
         return True
-    if normalizer.BLOCKQUOTE_PREFIX_RE.match(raw):
+    if normalizer.BLOCKQUOTE_PREFIX_RE.match(candidate):
         return True
-    if re.match(r"^ {0,3}[-+*][ \t]+\S", raw):
+    if re.match(r"^ {0,3}[-+*][ \t]+\S", candidate):
         return True
-    ordered = re.match(r"^ {0,3}(?P<number>\d{1,9})[.)][ \t]+\S", raw)
+    ordered = re.match(
+        r"^ {0,3}(?P<number>\d{1,9})[.)][ \t]+\S", candidate
+    )
     if ordered is not None and int(ordered.group("number")) == 1:
         return True
-    fence = REFERENCE_FENCE_OPEN_RE.match(raw)
+    fence = REFERENCE_FENCE_OPEN_RE.match(candidate)
     if fence is not None and (
         fence.group(1)[0] != "`" or "`" not in fence.group(2)
     ):
         return True
-    if re.match(r"^ {0,3}<(?:!--|\?|!\[CDATA\[|![A-Z])", raw):
+    if re.match(r"^ {0,3}<(?:!--|\?|!\[CDATA\[|![A-Z])", candidate):
         return True
     if re.match(
         r"^ {0,3}<(?:script|pre|style|textarea)(?:[ \t>]|$)",
-        raw,
+        candidate,
         re.IGNORECASE,
     ):
         return True
-    tag = re.match(r"^ {0,3}</?([A-Za-z][A-Za-z0-9-]*)(?:[ \t/>]|$)", raw)
+    tag = re.match(
+        r"^ {0,3}</?([A-Za-z][A-Za-z0-9-]*)(?:[ \t/>]|$)",
+        candidate,
+    )
     return bool(tag and tag.group(1).lower() in normalizer.HTML_BLOCK_TAGS)
 
 
@@ -1102,14 +1115,20 @@ def _inline_block_end(text: str, start: int) -> int:
     if first_line is None:
         return len(text)
     line_end = start + first_line.start()
+    opener_line = text[line_start:line_end]
+    list_item = _list_item_content(opener_line)
+    container_indent = list_item[0] if list_item is not None else 0
     # An ATX heading owns only its own source line.
-    if re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", text[line_start:line_end]):
+    if re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", opener_line):
         return line_end
     for ending in re.finditer(r"\r\n|\r|\n", text[start:]):
         following = start + ending.end()
         next_ending = re.search(r"\r\n|\r|\n", text[following:])
         next_end = len(text) if next_ending is None else following + next_ending.start()
-        if _starts_interrupting_block(text[following:next_end]):
+        if _starts_interrupting_block(
+            text[following:next_end],
+            container_indent=container_indent,
+        ):
             return start + ending.start()
     return len(text)
 
