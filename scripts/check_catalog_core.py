@@ -163,12 +163,15 @@ HTML_VOID_TAGS = {
     "link", "meta", "param", "source", "track", "wbr",
 }
 
+# HTML in-body start tags whose processing closes a p in button scope.
 HTML_IMPLICIT_CLOSE_STARTS = {
     "p": {
-        "address", "article", "aside", "blockquote", "div", "dl", "fieldset",
+        "address", "article", "aside", "blockquote", "center", "details",
+        "dialog", "dir", "div", "dl", "fieldset", "figcaption", "figure",
         "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header",
-        "hgroup", "hr", "main", "menu", "nav", "ol", "p", "pre", "search",
-        "section", "table", "ul",
+        "hgroup", "hr", "li", "dt", "dd", "listing", "main", "menu", "nav",
+        "ol", "p", "plaintext", "pre", "search", "section", "summary",
+        "table", "ul", "xmp",
     },
     "li": {"li"},
     "dt": {"dt", "dd"},
@@ -184,6 +187,11 @@ HTML_IMPLICIT_CLOSE_STARTS = {
     "td": {"td", "th"},
     "th": {"td", "th"},
 }
+HTML_SCOPE_BOUNDARIES = {
+    "applet", "caption", "html", "table", "td", "th", "marquee",
+    "object", "template",
+}
+HTML_RAW_TEXT_ELEMENTS = {"script", "style", "title", "iframe", "textarea", "xmp"}
 
 
 def html_start_tag_name(source: str) -> str | None:
@@ -198,6 +206,56 @@ def html_start_implicitly_closes(open_tag: str, source: str) -> bool:
         new_tag is not None
         and new_tag in HTML_IMPLICIT_CLOSE_STARTS.get(open_tag, set())
     )
+
+
+class HTMLVisibilityState:
+    """Keep element ancestry across chunks, including visible scope boundaries.
+
+    A parent close removes only its own subtree. In particular, an inner ul/ol
+    cannot close an outer hidden li, and closing a p cannot remove a hidden div.
+    """
+
+    def __init__(self) -> None:
+        self.elements: list[tuple[str, bool]] = []
+
+    @property
+    def hidden(self) -> bool:
+        return any(hidden for _tag, hidden in self.elements)
+
+    def close_for_start(self, source: str) -> None:
+        new_tag = html_start_tag_name(source)
+        if new_tag is None:
+            return
+        # More than one optional element can close, e.g. p inside an old li.
+        while True:
+            changed = False
+            for index in range(len(self.elements) - 1, -1, -1):
+                tag, _hidden = self.elements[index]
+                if not html_start_implicitly_closes(tag, source):
+                    continue
+                above = {name for name, _ in self.elements[index + 1 :]}
+                boundaries = set(HTML_SCOPE_BOUNDARIES)
+                if tag == "p":
+                    boundaries.add("button")
+                elif tag in {"li", "dt", "dd"}:
+                    boundaries.update({"ul", "ol", "menu", "dl"})
+                elif tag in {"option", "optgroup"}:
+                    boundaries.add("select")
+                elif tag in {"rt", "rp"}:
+                    boundaries.add("ruby")
+                if above & boundaries:
+                    continue
+                del self.elements[index:]
+                changed = True
+                break
+            if not changed:
+                return
+
+    def close(self, tag: str) -> None:
+        for index in range(len(self.elements) - 1, -1, -1):
+            if self.elements[index][0] == tag:
+                del self.elements[index:]
+                return
 
 
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
@@ -455,110 +513,67 @@ def _line_keeps_paragraph_open(raw: str, was_open: bool = False) -> bool:
 
 def strip_nonrendering_html_regions(
     text: str,
-    hidden_state: tuple[str, int] | None,
+    hidden_state: HTMLVisibilityState | None,
     *,
     honor_backslash_escapes: bool,
-) -> tuple[str, tuple[str, int] | None]:
-    """Remove parsed HTML regions whose contents are not visibly rendered."""
+) -> tuple[str, HTMLVisibilityState | None]:
+    """Filter hidden subtrees while retaining ancestry needed for implicit closes."""
+    state = hidden_state if hidden_state is not None else HTMLVisibilityState()
     out: list[str] = []
     index = 0
-
     while index < len(text):
-        if hidden_state is not None:
-            hidden_tag, depth = hidden_state
-            tag_start = text.find("<", index)
-            if tag_start < 0:
-                return "".join(out), hidden_state
-
-            tag_match = INLINE_HTML_TAG_RE.match(text, tag_start)
-            if tag_match is None:
-                index = tag_start + 1
-                continue
-
-            source = tag_match.group(0)
-            escaped = (
-                honor_backslash_escapes
-                and is_backslash_escaped(text, tag_start)
-            )
-            if escaped:
-                index = tag_match.end()
-                continue
-
-            if re.match(
-                rf"</{re.escape(hidden_tag)}(?:[ \t\r\n/>]|$)",
-                source,
-                re.IGNORECASE,
-            ):
-                depth -= 1
-                index = tag_match.end()
-                hidden_state = None if depth == 0 else (hidden_tag, depth)
-                continue
-
-            if html_start_implicitly_closes(hidden_tag, source):
-                hidden_state = None
-                index = tag_start
-                continue
-
-            if re.match(
-                rf"<{re.escape(hidden_tag)}(?:[ \t\r\n/>]|$)",
-                source,
-                re.IGNORECASE,
-            ):
-                if hidden_tag not in HTML_VOID_TAGS:
-                    depth += 1
-                    hidden_state = (hidden_tag, depth)
-                index = tag_match.end()
-                continue
-
-            index = tag_match.end()
-            continue
-
-        tag_start = text.find("<", index)
-        if tag_start < 0:
-            out.append(text[index:])
+        start = text.find("<", index)
+        if start < 0:
+            if not state.hidden:
+                out.append(text[index:])
             break
-
-        tag_match = INLINE_HTML_TAG_RE.match(text, tag_start)
-        if tag_match is None:
-            out.append(text[index : tag_start + 1])
-            index = tag_start + 1
+        if not state.hidden:
+            out.append(text[index:start])
+        token = INLINE_HTML_TAG_RE.match(text, start)
+        if token is None:
+            if not state.hidden:
+                out.append("<")
+            index = start + 1
             continue
-
-        source = tag_match.group(0)
-        escaped = (
-            honor_backslash_escapes
-            and is_backslash_escaped(text, tag_start)
-        )
-        if escaped or source.startswith("</"):
-            out.append(text[index : tag_match.end()])
-            index = tag_match.end()
+        source = token.group(0)
+        index = token.end()
+        if honor_backslash_escapes and is_backslash_escaped(text, start):
+            if not state.hidden:
+                out.append(source)
             continue
-
-        name_match = re.match(r"<(?P<tag>[A-Za-z][A-Za-z0-9-]*)", source)
-        if name_match is None:
-            out.append(text[index : tag_match.end()])
-            index = tag_match.end()
+        end = re.match(r"</([A-Za-z][A-Za-z0-9-]*)(?:[ \t\r\n/>]|$)", source)
+        end_tag = end.group(1).lower() if end is not None else None
+        if state.elements and state.elements[-1][0] in HTML_RAW_TEXT_ELEMENTS:
+            raw_tag = state.elements[-1][0]
+            if end_tag == raw_tag:
+                was_hidden = state.hidden
+                state.elements.pop()
+                if not was_hidden:
+                    out.append(source)
+            elif not state.hidden:
+                out.append(source)
             continue
-
-        tag = name_match.group("tag").lower()
-        is_hidden = (
+        if end_tag is not None:
+            was_hidden = state.hidden
+            state.close(end_tag)
+            if not was_hidden or not state.hidden:
+                out.append(source)
+            continue
+        tag = html_start_tag_name(source)
+        if tag is None:
+            if not state.hidden:
+                out.append(source)
+            continue
+        state.close_for_start(source)
+        own_hidden = (
             tag in NONRENDERING_HTML_TAGS
             or HTML_HIDDEN_ATTR_RE.search(source) is not None
         )
-        if not is_hidden:
-            out.append(text[index : tag_match.end()])
-            index = tag_match.end()
-            continue
-
-        out.append(text[index:tag_start])
-        if tag in HTML_VOID_TAGS:
-            index = tag_match.end()
-            continue
-
-        hidden_state = (tag, 1)
-        index = tag_match.end()
-
-    return "".join(out), hidden_state
+        if not state.hidden and not own_hidden:
+            out.append(source)
+        if tag not in HTML_VOID_TAGS:
+            state.elements.append((tag, own_hidden))
+    return "".join(out), state if state.elements else None
 
 
 def textarea_literal_parts(
@@ -673,8 +688,8 @@ def visible_nonfenced_lines(
     html_textarea_open = False
     raw_html_comment = False
     raw_html_source_comment = False
-    raw_html_hidden_tag: tuple[str, int] | None = None
-    raw_html_source_hidden_tag: tuple[str, int] | None = None
+    raw_html_hidden_tag: HTMLVisibilityState | None = None
+    raw_html_source_hidden_tag: HTMLVisibilityState | None = None
     paragraph_open = False
 
     def append_visible(source_index: int, value: str) -> None:
@@ -1842,9 +1857,22 @@ ASCII_URL_EDGE_CHARS = "".join(chr(value) for value in range(0x21))
 
 
 def decoded_html_url_attribute(value: str) -> str:
-    """Apply HTML attribute decoding plus URL preprocessing used for classification."""
+    """Preprocess an href in this repository's HTTP(S) document context.
+
+    Literal backslashes are separators in special-URL paths, not in query or
+    fragment data. Encoded separators and non-HTTP schemes remain untouched.
+    """
     decoded = decode_html_attribute_references(value).strip(ASCII_URL_EDGE_CHARS)
-    return decoded.replace("\t", "").replace("\r", "").replace("\n", "")
+    decoded = decoded.replace("\t", "").replace("\r", "").replace("\n", "")
+    scheme = re.match(r"^([A-Za-z][A-Za-z0-9+.-]*):", decoded)
+    if scheme is not None and scheme.group(1).lower() not in {"http", "https"}:
+        return decoded
+    boundary = len(decoded)
+    for delimiter in ("?", "#"):
+        position = decoded.find(delimiter)
+        if position >= 0:
+            boundary = min(boundary, position)
+    return decoded[:boundary].replace("\\", "/") + decoded[boundary:]
 
 
 def html_anchor_links(text: str) -> list[tuple[str, str]]:
@@ -3347,7 +3375,6 @@ def record_fragment_ids(path: Path) -> set[str]:
     )
 
     return anchors
-
 
 record_fragment_cache: dict[Path, set[str]] = {}
 
