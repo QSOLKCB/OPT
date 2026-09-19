@@ -993,9 +993,57 @@ def _reference_label_has_blank_line(value: str) -> bool:
     return re.search(r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)", value) is not None
 
 
+def _mask_valid_reference_definition_lines(
+    text: str,
+) -> tuple[str, dict[str, str]]:
+    """Protect non-rendering reference definition lines during link rewriting."""
+    valid_labels = {
+        _normalized_reference_label(label)
+        for label, _destination in _reference_entries(text)
+    }
+    protected: dict[str, str] = {}
+    out: list[str] = []
+    codepoint = 0xE000
+
+    def token_for(raw: str) -> str:
+        nonlocal codepoint
+        while True:
+            token = chr(codepoint)
+            codepoint += 1
+            if token not in text and token not in protected:
+                protected[token] = raw
+                return token
+
+    prefix = re.compile(
+        r"^ {0,3}\[(?P<label>(?:\\.|[^\[\]\\])+)]\:"
+    )
+    for raw in text.splitlines(keepends=True):
+        content = raw.rstrip("\r\n")
+        ending = raw[len(content) :]
+        match = prefix.match(content)
+        if (
+            match is not None
+            and _normalized_reference_label(match.group("label")) in valid_labels
+        ):
+            out.append(token_for(content) + ending)
+        else:
+            out.append(raw)
+
+    return "".join(out), protected
+
+
+def _restore_masked_reference_definition_lines(
+    text: str, protected: dict[str, str]
+) -> str:
+    for token, raw in protected.items():
+        text = text.replace(token, raw)
+    return text
+
+
 def canonicalize_reference_record_links(text: str) -> str:
     """Resolve reference-style OPT links so the core validates their destinations."""
     destinations = _reference_destinations(text)
+    text, protected_definitions = _mask_valid_reference_definition_lines(text)
 
     def destination_for(label: str, reference: str) -> str | None:
         reference_label = reference or label
@@ -1046,7 +1094,10 @@ def canonicalize_reference_record_links(text: str) -> str:
         return match.group(0)
 
     text = SHORT_REFERENCE_RECORD_LINK_RE.sub(replace_short, text)
-    return normalizer.mask_inline_code_record_destinations(text)
+    text = normalizer.mask_inline_code_record_destinations(text)
+    return _restore_masked_reference_definition_lines(
+        text, protected_definitions
+    )
 
 
 normalizer.canonicalize_classification_placeholders = canonicalize_classification_placeholders
