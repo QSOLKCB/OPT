@@ -132,7 +132,7 @@ CASES = [
     dict(
         id="control-valid-note-fragment",
         expected=0,
-        source="[note](sources/AUDIT-NOTE.md#source)",
+        source="[note](../sources/AUDIT-NOTE.md#source)",
         note="https://example.com/source",
     ),
     dict(
@@ -173,6 +173,21 @@ CASES = [
         source='<a href="" href="https://example.com/source">source</a>',
         stderr_contains="## Source evidence lacks a concrete source identity",
     ),
+    dict(
+        id="codex-valueless-first-record-href",
+        expected=1,
+        readme=(
+            '<a href href="' + VALID_RECORD + '">OPT-INC-001</a>'
+        ),
+        stderr_contains="visible record link in README.md has invalid destination",
+    ),
+    dict(
+        id="control-valued-first-record-href",
+        expected=0,
+        readme=(
+            '<a href="' + VALID_RECORD + '" href>OPT-INC-001</a>'
+        ),
+    ),
     # Placeholder-only mandatory sections remain empty after ordinary punctuation.
     dict(
         id="codex-punctuated-placeholder",
@@ -196,6 +211,29 @@ CASES = [
             "**Status:** Source candidate\n"
         ),
         stderr_contains="missing visible sections",
+    ),
+    dict(
+        id="codex-nested-normalizer-placeholder",
+        expected=1,
+        validation="TODO;",
+        nest_existing_record=True,
+        stderr_contains=(
+            "empty/template/structural/markup-only mandatory section ## Validation"
+        ),
+    ),
+    # Parsed Markdown note links resolve from the containing record.
+    dict(
+        id="codex-wrong-relative-source-note",
+        expected=1,
+        source="[note](sources/AUDIT-NOTE.md)",
+        note="https://example.com/source",
+        stderr_contains="## Source evidence lacks a concrete source identity",
+    ),
+    dict(
+        id="control-correct-relative-source-note",
+        expected=0,
+        source="[note](../sources/AUDIT-NOTE.md)",
+        note="https://example.com/source",
     ),
 ]
 
@@ -263,6 +301,30 @@ class CatalogPublicEntrypointTests(unittest.TestCase):
                     nested_record,
                     encoding="utf-8",
                 )
+
+            if case.get("nest_existing_record") is True:
+                source_path = root / RECORD
+                nested_path = (
+                    root
+                    / "optimizations"
+                    / "incubator"
+                    / Path(RECORD).name
+                )
+                nested_path.parent.mkdir(parents=True, exist_ok=True)
+                source_path.replace(nested_path)
+                old_destination = RECORD
+                new_destination = (
+                    "optimizations/incubator/" + Path(RECORD).name
+                )
+                for document_name in ("README.md", "CATALOG.md"):
+                    document_path = root / document_name
+                    document_path.write_text(
+                        document_path.read_text(encoding="utf-8").replace(
+                            old_destination,
+                            new_destination,
+                        ),
+                        encoding="utf-8",
+                    )
 
             readme = case.get("readme")
             if isinstance(readme, str):
