@@ -576,6 +576,7 @@ def visible_nonfenced_lines(
     visible_events: list[tuple[int, str]] | None = None,
     raw_html_events: list[tuple[int, str]] | None = None,
     raw_html_source_events: list[tuple[int, str]] | None = None,
+    fenced_events: list[tuple[int, str]] | None = None,
 ) -> list[str]:
     """Return Markdown-visible lines used by schema validation.
 
@@ -688,6 +689,8 @@ def visible_nonfenced_lines(
                     fence_len = 0
                     fence_quote_depth = 0
                     fence_list_indent = 0
+                elif fenced_events is not None:
+                    fenced_events.append((source_index, fence_view))
                 continue
 
         if html_mode is not None:
@@ -984,12 +987,14 @@ def section_lines(
     *,
     include_raw_html_text: bool = False,
     include_raw_html_source: bool = False,
+    rendered_fenced_text: list[str] | None = None,
 ) -> list[str]:
     """Return one exact rendered level-2 Markdown section."""
     source_lines = markdown_source_lines(text)
     visible_events: list[tuple[int, str]] = []
     raw_html_events: list[tuple[int, str]] = []
     raw_html_source_events: list[tuple[int, str]] = []
+    fenced_events: list[tuple[int, str]] = []
     visible_nonfenced_lines(
         source_lines,
         visible_events=visible_events,
@@ -997,6 +1002,7 @@ def section_lines(
         raw_html_source_events=(
             raw_html_source_events if include_raw_html_source else None
         ),
+        fenced_events=fenced_events if rendered_fenced_text is not None else None,
     )
 
     visible_values = [line for _source_index, line in visible_events]
@@ -1045,6 +1051,12 @@ def section_lines(
         section.extend(
             source
             for source_index, source in raw_html_source_events
+            if start_source < source_index < end_source
+        )
+    if rendered_fenced_text is not None:
+        rendered_fenced_text.extend(
+            rendered
+            for source_index, rendered in fenced_events
             if start_source < source_index < end_source
         )
     return section
@@ -1273,7 +1285,9 @@ def find_inline_link_end(text: str, open_paren: int) -> int | None:
             depth -= 1
             i += 1
             continue
-        if char in " \t\n" and depth == 0:
+        if char in " \t\n":
+            if depth != 0:
+                return None
             return parse_link_title_and_close(text, i)
         if char in "<>" or ord(char) < 0x20:
             return None
@@ -1320,7 +1334,9 @@ def inline_link_destination(text: str, open_paren: int) -> str | None:
             if depth == 0:
                 return text[start:i]
             depth -= 1
-        elif char in " \t\n" and depth == 0:
+        elif char in " \t\n":
+            if depth != 0:
+                return None
             return text[start:i]
         i += 1
     return None
@@ -1406,11 +1422,35 @@ def rendered_record_label(
     return rendered.strip()
 
 
+URI_UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
+PERCENT_ESCAPE_RE = re.compile(r"%([0-9A-Fa-f]{2})")
+
+
+def decode_safe_repository_path_escapes(path: str) -> str | None:
+    """Decode unreserved URI escapes while rejecting encoded separators/traversal."""
+    if re.search(r"%(?:2[fF]|5[cC])", path):
+        return None
+
+    decoded_segments: list[str] = []
+    for segment in path.split("/"):
+        def replace_escape(match: re.Match[str]) -> str:
+            char = chr(int(match.group(1), 16))
+            return char if char in URI_UNRESERVED else match.group(0)
+
+        decoded = PERCENT_ESCAPE_RE.sub(replace_escape, segment)
+        if decoded in {".", ".."} and decoded != segment:
+            return None
+        decoded_segments.append(decoded)
+
+    return "/".join(decoded_segments)
+
+
 def normalize_repository_relative_path(path: str) -> str | None:
     """Normalize a repository-relative POSIX path without allowing root escape."""
-    if not path or path.startswith("/"):
+    decoded = decode_safe_repository_path_escapes(path)
+    if decoded is None or not decoded or decoded.startswith("/"):
         return None
-    normalized = posixpath.normpath(path)
+    normalized = posixpath.normpath(decoded)
     if normalized in {"", "."} or normalized == ".." or normalized.startswith("../"):
         return None
     return normalized
@@ -1640,7 +1680,7 @@ def html_anchor_label_extent(
         if re.match(r"<a(?:[ \t\r\n]|>)", source, re.IGNORECASE):
             return tag_start, tag_start
 
-        if re.fullmatch(r"</a[ \t\r\n]*>", source, re.IGNORECASE):
+        if re.match(r"</a(?:[ \t\r\n/>]|$)", source, re.IGNORECASE):
             return tag_start, tag.end()
 
         cursor = tag.end()
@@ -2330,6 +2370,14 @@ def section_has_content(lines: list[str]) -> bool:
     return False
 
 
+def fenced_rendered_text_has_content(lines: list[str]) -> bool:
+    """Treat fenced-code bodies as visible literal content, not Markdown structure."""
+    return any(
+        line.strip() and line.strip() not in TEMPLATE_PLACEHOLDER_LINES
+        for line in lines
+    )
+
+
 def source_commit_has_context(line: str, match: re.Match[str]) -> bool:
     prefix = line[max(0, match.start() - 80) : match.start()]
     cleaned = prefix.rstrip(" \t`*_~([{<")
@@ -2596,12 +2644,55 @@ def source_text_has_identity(line: str, sources_root: Path) -> bool:
     return False
 
 
+def source_link_destination_has_identity(value: str, sources_root: Path) -> bool:
+    """Require a parsed link destination to be a complete provenance identity."""
+    candidate = value.strip()
+    if not candidate:
+        return False
+
+    if valid_http_source_url(candidate):
+        return True
+
+    if re.fullmatch(r"(?:doi:\s*)?10\.\d{4,9}/\S+", candidate, re.IGNORECASE):
+        return True
+
+    repository = re.fullmatch(
+        r"(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)",
+        candidate,
+    )
+    if repository is not None and valid_repository_identity(
+        repository.group("owner"), repository.group("repo")
+    ):
+        return True
+
+    local_note, _separator, _fragment = candidate.partition("#")
+    if re.fullmatch(r"sources/[A-Za-z0-9._/-]+\.md", local_note) is None:
+        return False
+
+    note_path = (ROOT / local_note).resolve()
+    try:
+        note_path.relative_to(sources_root)
+    except ValueError:
+        return False
+    return note_path.is_file() and source_note_has_identity(note_path, sources_root)
+
+
 def source_section_has_identity(
     lines: list[str],
     document_reference_definitions: dict[str, str] | None = None,
+    rendered_fenced_text: list[str] | None = None,
 ) -> bool:
     """Require at least one concrete, rendered provenance identity."""
     sources_root = (ROOT / "sources").resolve()
+
+    if any(
+        raw.strip()
+        and not SOURCE_PLACEHOLDER_RE.fullmatch(raw.strip())
+        and source_text_has_identity(raw, sources_root)
+        for raw in (rendered_fenced_text or [])
+    ):
+        return True
+
     visible = list(lines)
     hidden_reference_lines, local_destinations = reference_definition_scan(visible)
     destinations = (
@@ -2642,7 +2733,7 @@ def source_section_has_identity(
         if not has_substantive_rendered_text(label):
             continue
         rendered_destination = commonmark_unescape_outside_code_spans(destination)
-        if source_text_has_identity(rendered_destination, sources_root):
+        if source_link_destination_has_identity(rendered_destination, sources_root):
             return True
 
     for reference, label in used_reference_links(source):
@@ -2652,7 +2743,7 @@ def source_section_has_identity(
         if destination is None:
             continue
         rendered_destination = commonmark_unescape_outside_code_spans(destination)
-        if source_text_has_identity(rendered_destination, sources_root):
+        if source_link_destination_has_identity(rendered_destination, sources_root):
             return True
 
     return False
@@ -2845,20 +2936,32 @@ for path in sorted(OPT_DIR.glob("*.md")):
         )
 
     for heading in sorted(REQUIRED_V2):
-        if not section_has_content(
-            section_lines(text, heading, include_raw_html_text=True)
+        rendered_fenced_text: list[str] = []
+        section = section_lines(
+            text,
+            heading,
+            include_raw_html_text=True,
+            rendered_fenced_text=rendered_fenced_text,
+        )
+        if not (
+            section_has_content(section)
+            or fenced_rendered_text_has_content(rendered_fenced_text)
         ):
             die(
                 f"{path.relative_to(ROOT)} has empty/template/structural/markup-only mandatory section {heading}"
             )
 
+    source_fenced_text: list[str] = []
     source_evidence = section_lines(
         text,
         "## Source evidence",
         include_raw_html_source=True,
+        rendered_fenced_text=source_fenced_text,
     )
     if not source_section_has_identity(
-        source_evidence, status_definitions
+        source_evidence,
+        status_definitions,
+        rendered_fenced_text=source_fenced_text,
     ):
         die(
             f"{path.relative_to(ROOT)} ## Source evidence lacks a concrete source identity "
