@@ -206,6 +206,13 @@ HTML_RAW_TEXT_ELEMENTS = {
 HTML_EOF_TEXT_ELEMENTS = {"plaintext"}
 SVG_HTML_INTEGRATION_POINTS = {"foreignobject", "desc", "title"}
 MATHML_TEXT_INTEGRATION_POINTS = {"mi", "mo", "mn", "ms", "mtext"}
+HTML_FOREIGN_BREAKOUT_START_TAGS = {
+    "b", "big", "blockquote", "body", "br", "center", "code", "dd", "div",
+    "dl", "dt", "em", "embed", "h1", "h2", "h3", "h4", "h5", "h6",
+    "head", "hr", "i", "img", "li", "listing", "menu", "meta", "nobr",
+    "ol", "p", "pre", "ruby", "s", "small", "span", "strong", "strike",
+    "sub", "sup", "table", "tt", "u", "ul", "var",
+}
 HTML_SELECT_HANDLED_START_TAGS = {
     "option", "optgroup", "hr", "select", "input", "keygen", "textarea",
     "script", "template",
@@ -363,6 +370,42 @@ class HTMLVisibilityState:
                 foreign = True
         return new_tag in {"svg", "math"} or foreign
 
+    def current_foreign_root_index(self) -> int | None:
+        """Return the active foreign-content root, respecting integration points."""
+        foreign = False
+        root: int | None = None
+        for index, (tag, _hidden) in enumerate(self.elements):
+            if foreign and (
+                tag in SVG_HTML_INTEGRATION_POINTS
+                or tag in MATHML_TEXT_INTEGRATION_POINTS
+            ):
+                foreign = False
+                root = None
+                continue
+            if not foreign and tag in {"svg", "math"}:
+                foreign = True
+                root = index
+        return root if foreign else None
+
+    def break_out_of_foreign_content(self, source: str) -> None:
+        """Apply HTML foreign-content breakout recovery before reprocessing a start."""
+        new_tag = html_start_tag_name(source)
+        if new_tag is None:
+            return
+        breakout = new_tag in HTML_FOREIGN_BREAKOUT_START_TAGS
+        if new_tag == "font":
+            breakout = any(
+                first_html_attribute_value(source, attribute) is not None
+                for attribute in ("color", "face", "size")
+            )
+        if not breakout:
+            return
+        root = self.current_foreign_root_index()
+        if root is None:
+            return
+        del self.elements[root:]
+        self._refresh_foster_parenting()
+
     def close_for_start(self, source: str) -> None:
         new_tag = html_start_tag_name(source)
         if new_tag is None:
@@ -419,6 +462,18 @@ class HTMLVisibilityState:
                 return
 
     def close(self, tag: str) -> None:
+        if tag == "table":
+            # In cell/row modes, </table> closes the active cell/table context
+            # and is then reprocessed. Do not let td/th stop the table close.
+            for index in range(len(self.elements) - 1, -1, -1):
+                current_tag = self.elements[index][0]
+                if current_tag == "table":
+                    del self.elements[index:]
+                    self._refresh_foster_parenting()
+                    return
+                if current_tag in {"html", "template"}:
+                    return
+
         for index in range(len(self.elements) - 1, -1, -1):
             current_tag = self.elements[index][0]
             if current_tag == tag:
@@ -777,6 +832,7 @@ def strip_nonrendering_html_regions(
                 continue
         if state.start_is_ignored(source):
             continue
+        state.break_out_of_foreign_content(source)
         state.close_for_start(source)
         if state.start_is_foster_parented(source):
             state.begin_foster_parenting()
@@ -913,6 +969,15 @@ def visible_nonfenced_lines(
     paragraph_open = False
 
     def append_visible(source_index: int, value: str) -> None:
+        hidden_by_open_html = bool(
+            (raw_html_hidden_tag is not None and raw_html_hidden_tag.hidden)
+            or (
+                raw_html_source_hidden_tag is not None
+                and raw_html_source_hidden_tag.hidden
+            )
+        )
+        if hidden_by_open_html and value.strip():
+            return
         visible.append(value)
         if visible_events is not None:
             visible_events.append((source_index, value))
@@ -1092,8 +1157,9 @@ def visible_nonfenced_lines(
                         html_list_indent = 0
                         raw_html_comment = False
                         raw_html_source_comment = False
-                        raw_html_hidden_tag = None
-                        raw_html_source_hidden_tag = None
+                        # CommonMark ends this raw block at the blank line, but
+                        # an open browser DOM ancestor (for example <div hidden>)
+                        # remains open until an actual HTML end tag closes it.
                         boundary(source_index)
                     continue
 
