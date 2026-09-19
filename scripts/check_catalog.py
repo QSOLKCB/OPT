@@ -687,6 +687,16 @@ def _record_destination_path(destination: str) -> str | None:
     return normalized
 
 
+def _synthetic_inline_destination(destination: str) -> str:
+    """Emit a parsed reference destination as a safe angle-form inline target."""
+    escaped = (
+        destination.replace("\\", "\\\\")
+        .replace("<", "\\<")
+        .replace(">", "\\>")
+    )
+    return f"<{escaped}>"
+
+
 def _render_reference_aware_candidate(value: str, definitions: set[str]) -> str:
     """Render the placeholder-relevant subset including reference-style links/images."""
     rendered = normalizer._render_placeholder_candidate(value)
@@ -1101,7 +1111,7 @@ def canonicalize_reference_record_links(text: str) -> str:
         rendered_label = _render_reference_record_label(label)
         record_path = _record_destination_path(destination)
         if record_path is not None:
-            return f"[{label}]({destination})"
+            return f"[{label}]({_synthetic_inline_destination(destination)})"
         if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None:
             return f"[{label}]({INVALID_REFERENCE_DESTINATION})"
         return match.group(0)
@@ -1122,7 +1132,7 @@ def canonicalize_reference_record_links(text: str) -> str:
         rendered_label = _render_reference_record_label(label)
         record_path = _record_destination_path(destination)
         if record_path is not None:
-            return f"[{label}]({destination})"
+            return f"[{label}]({_synthetic_inline_destination(destination)})"
         if re.fullmatch(r"OPT-[A-Z]+-\d{3}", rendered_label) is not None:
             return f"[{label}]({INVALID_REFERENCE_DESTINATION})"
         return match.group(0)
