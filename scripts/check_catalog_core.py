@@ -4055,6 +4055,11 @@ visible_catalog = "\n".join(
     for index, line in enumerate(catalog_visible_lines)
     if index not in hidden_catalog_definitions
 )
+visible_catalog, _catalog_hidden_state = strip_nonrendering_html_regions(
+    visible_catalog,
+    None,
+    honor_backslash_escapes=True,
+)
 visible_catalog = strip_inline_html_constructs(visible_catalog)
 previous_catalog = None
 while visible_catalog != previous_catalog:
