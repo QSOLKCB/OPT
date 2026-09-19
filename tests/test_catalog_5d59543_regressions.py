@@ -389,6 +389,45 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         self.assertEqual(accepted.returncode, 0, evidence)
         self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
 
+        hidden_fence = self.run_mandatory_section_case(
+            "<div hidden>\n\n```text\nvalidate output bytes\n```\n\n</div>"
+        )
+        evidence = hidden_fence.stdout + hidden_fence.stderr
+        self.assertEqual(hidden_fence.returncode, 1, evidence)
+        self.assertIn(
+            "empty/template/structural/markup-only mandatory section ## Validation",
+            hidden_fence.stderr,
+        )
+        self.assertNotIn("Traceback", hidden_fence.stderr)
+
+        visible_fence = self.run_mandatory_section_case(
+            "<div>\n\n```text\nvalidate output bytes\n```\n\n</div>"
+        )
+        evidence = visible_fence.stdout + visible_fence.stderr
+        self.assertEqual(visible_fence.returncode, 0, evidence)
+        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", visible_fence.stdout)
+
+    def test_catalog_code_span_html_is_literal_for_visible_id_inventory(self) -> None:
+        rejected = self.run_document_case(
+            "CATALOG.md",
+            "`<span hidden>` OPT-FAKE-999",
+        )
+        evidence = rejected.stdout + rejected.stderr
+        self.assertEqual(rejected.returncode, 1, evidence)
+        self.assertIn(
+            "CATALOG.md references unknown visible record ID(s): OPT-FAKE-999",
+            rejected.stderr,
+        )
+        self.assertNotIn("Traceback", rejected.stderr)
+
+        accepted = self.run_document_case(
+            "CATALOG.md",
+            "<span hidden>OPT-FAKE-999</span>",
+        )
+        evidence = accepted.stdout + accepted.stderr
+        self.assertEqual(accepted.returncode, 0, evidence)
+        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
