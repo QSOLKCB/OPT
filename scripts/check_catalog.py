@@ -1053,6 +1053,23 @@ def _reference_label_has_blank_line(value: str) -> bool:
     return re.search(r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)", value) is not None
 
 
+def _find_label_close_in_paragraph(text: str, open_index: int) -> int | None:
+    """Find a label close without crossing a CommonMark paragraph boundary."""
+    boundary = re.search(
+        r"(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)",
+        text[open_index + 1 :],
+    )
+    paragraph_end = (
+        len(text)
+        if boundary is None
+        else open_index + 1 + boundary.start()
+    )
+    close = normalizer._find_label_close(text, open_index)
+    if close is None or close >= paragraph_end:
+        return None
+    return close
+
+
 def _mask_inline_link_image_spans(
     text: str,
 ) -> tuple[str, dict[str, str]]:
@@ -1087,7 +1104,7 @@ def _mask_inline_link_image_spans(
             index += 1
             continue
 
-        label_close = normalizer._find_label_close(text, label_open)
+        label_close = _find_label_close_in_paragraph(text, label_open)
         if (
             label_close is None
             or label_close + 1 >= len(text)
