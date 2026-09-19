@@ -101,6 +101,10 @@ CASES = [
     ("raw-pi-terminator-suffix", '<?x?><a href="' + BROKEN + '">OPT-FAKE-999</a>', False),
     ("raw-cdata-terminator-suffix", '<![CDATA[x]]><a href="' + BROKEN + '">OPT-FAKE-999</a>', False),
     ("raw-declaration-terminator-suffix", '<!DOCTYPE html><a href="' + BROKEN + '">OPT-FAKE-999</a>', False),
+    ("anchor-close-reconstructs-hidden-i", '<a><i hidden></a><a href="' + BROKEN + '">details</a></i>', True),
+    ("svg-defs-subtree-nonrendering", '<svg><defs><a xlink:href="' + BROKEN + '"><text>details</text></a></defs></svg>', True),
+    ("type1-script-terminator-suffix", '<script></script><a href="' + BROKEN + '">details</a>', False),
+    ("type1-style-terminator-suffix", '<style></style><a href="' + BROKEN + '">details</a>', False),
     ("non-http-scheme-control", '<a href="urn:optimizations\\does-not-exist.md">details</a>', True),
 ]
 
@@ -321,6 +325,17 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         evidence = body_accepted.stdout + body_accepted.stderr
         self.assertEqual(body_accepted.returncode, 0, evidence)
         self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", body_accepted.stdout)
+
+        html_rejected = self.run_status_visibility_case("<html hidden></html>", "")
+        evidence = html_rejected.stdout + html_rejected.stderr
+        self.assertEqual(html_rejected.returncode, 1, evidence)
+        self.assertIn("must contain exactly one visible Status line", html_rejected.stderr)
+        self.assertNotIn("Traceback", html_rejected.stderr)
+
+        html_accepted = self.run_status_visibility_case("<html></html>", "")
+        evidence = html_accepted.stdout + html_accepted.stderr
+        self.assertEqual(html_accepted.returncode, 0, evidence)
+        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", html_accepted.stdout)
 
 
     def run_mandatory_section_case(
