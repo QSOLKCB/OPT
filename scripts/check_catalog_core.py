@@ -205,6 +205,7 @@ HTML_RAW_TEXT_ELEMENTS = {
 }
 HTML_EOF_TEXT_ELEMENTS = {"plaintext"}
 SVG_HTML_INTEGRATION_POINTS = {"foreignobject", "desc", "title"}
+SVG_NONRENDERING_TAGS = {"defs"}
 MATHML_TEXT_INTEGRATION_POINTS = {"mi", "mo", "mn", "ms", "mtext"}
 HTML_FOREIGN_BREAKOUT_START_TAGS = {
     "b", "big", "blockquote", "body", "br", "center", "code", "dd", "div",
@@ -399,8 +400,8 @@ class HTMLVisibilityState:
             and new_tag not in HTML_SELECT_HANDLED_START_TAGS
         )
 
-    def merge_body_attributes(self, source: str) -> None:
-        """Merge attributes from a duplicate body start onto the document body."""
+    def merge_document_attributes(self, source: str) -> None:
+        """Merge duplicate html/body attributes onto persistent document state."""
         if HTML_HIDDEN_ATTR_RE.search(source) is not None:
             self.document_hidden = True
 
@@ -525,7 +526,6 @@ class HTMLVisibilityState:
                     return
                 if (
                     tag in HTML_ACTIVE_FORMATTING_TAGS
-                    and tag != "a"
                     and index < len(self.elements) - 1
                 ):
                     # Adoption-agency recovery removes the target formatting
@@ -816,6 +816,12 @@ def raw_html_tag_closes(raw: str, tag: str) -> bool:
     return re.search(rf"</{re.escape(tag)}>", raw, re.IGNORECASE) is not None
 
 
+def raw_html_tag_close_end(raw: str, tag: str) -> int | None:
+    """Return the end offset of the exact CommonMark type-1 end tag."""
+    match = re.search(rf"</{re.escape(tag)}>", raw, re.IGNORECASE)
+    return None if match is None else match.end()
+
+
 def _line_keeps_paragraph_open(raw: str, was_open: bool = False) -> bool:
     """Approximate whether this source line leaves a paragraph open."""
     stripped = raw.strip()
@@ -915,8 +921,8 @@ def strip_nonrendering_html_regions(
             # In "in table" mode a nested table start closes the current table
             # and is reprocessed rather than being nested beneath it.
             state.close("table")
-        if tag == "body":
-            state.merge_body_attributes(source)
+        if tag in {"html", "body"}:
+            state.merge_document_attributes(source)
             continue
         if state.start_is_ignored(source):
             continue
@@ -924,14 +930,15 @@ def strip_nonrendering_html_regions(
         state.close_for_start(source)
         if state.start_is_foster_parented(source):
             state.begin_foster_parenting()
+        namespace = state.namespace_for_start(tag)
         own_hidden = (
             tag in NONRENDERING_HTML_TAGS
+            or (namespace == "svg" and tag in SVG_NONRENDERING_TAGS)
             or HTML_HIDDEN_ATTR_RE.search(source) is not None
         )
         if not state.hidden and not own_hidden:
             out.append(source)
         self_closing = re.search(r"/[ \t\r\n]*>$", source) is not None
-        namespace = state.namespace_for_start(tag)
         in_foreign_content = namespace in {"svg", "math"}
 
         if tag == "form":
@@ -1057,6 +1064,7 @@ def visible_nonfenced_lines(
     fence_len = 0
     fence_quote_depth = 0
     fence_list_indent = 0
+    fence_hidden = False
     active_list_indent: int | None = None
     inline_comment = False
     html_mode: str | None = None
@@ -1148,6 +1156,7 @@ def visible_nonfenced_lines(
                 fence_len = 0
                 fence_quote_depth = 0
                 fence_list_indent = 0
+                fence_hidden = False
                 boundary(source_index)
             else:
                 paragraph_open = False
@@ -1165,7 +1174,8 @@ def visible_nonfenced_lines(
                     fence_len = 0
                     fence_quote_depth = 0
                     fence_list_indent = 0
-                elif fenced_events is not None:
+                    fence_hidden = False
+                elif fenced_events is not None and not fence_hidden:
                     fenced_events.append((source_index, fence_view))
                 continue
 
@@ -1223,15 +1233,23 @@ def visible_nonfenced_lines(
                         append_raw_html_text(source_index, html_view)
 
                 if html_mode == "tag":
-                    if html_end is not None and raw_html_tag_closes(html_view, html_end):
+                    close_end = (
+                        raw_html_tag_close_end(html_view, html_end)
+                        if html_end is not None
+                        else None
+                    )
+                    if close_end is not None:
+                        suffix = html_view[close_end:]
                         html_mode = None
                         html_end = None
                         html_quote_depth = 0
                         html_list_indent = 0
                         raw_html_comment = False
                         raw_html_source_comment = False
-                        raw_html_hidden_tag = None
-                        raw_html_source_hidden_tag = None
+                        if suffix:
+                            append_raw_html_source(source_index, suffix)
+                            if raw_html_text is not None or raw_html_events is not None:
+                                append_raw_html_text(source_index, suffix)
                     continue
                 if html_mode == "token":
                     if html_end is not None and html_end in html_view:
@@ -1309,6 +1327,22 @@ def visible_nonfenced_lines(
                         fence_len = len(run)
                         fence_quote_depth = quote_depth
                         fence_list_indent = current_list_indent or 0
+                        for html_state in (
+                            raw_html_source_hidden_tag,
+                            raw_html_hidden_tag,
+                        ):
+                            if html_state is not None:
+                                html_state.process_generated_block_start("pre")
+                        fence_hidden = bool(
+                            (
+                                raw_html_source_hidden_tag is not None
+                                and raw_html_source_hidden_tag.hidden
+                            )
+                            or (
+                                raw_html_hidden_tag is not None
+                                and raw_html_hidden_tag.hidden
+                            )
+                        )
                         boundary(source_index)
                         continue
 
@@ -1351,16 +1385,19 @@ def visible_nonfenced_lines(
                             or (html_mode == "tag" and html_end == "pre")
                         ):
                             append_raw_html_text(source_index, block_view)
+                    if html_mode == "tag" and html_end is not None:
+                        close_end = raw_html_tag_close_end(block_view, html_end)
+                        if close_end is not None:
+                            suffix = block_view[close_end:]
+                            html_mode = None
+                            html_end = None
+                            html_quote_depth = 0
+                            html_list_indent = 0
+                            if suffix:
+                                append_raw_html_source(source_index, suffix)
+                                if raw_html_text is not None or raw_html_events is not None:
+                                    append_raw_html_text(source_index, suffix)
                     if (
-                        html_mode == "tag"
-                        and html_end is not None
-                        and raw_html_tag_closes(block_view, html_end)
-                    ):
-                        html_mode = None
-                        html_end = None
-                        html_quote_depth = 0
-                        html_list_indent = 0
-                    elif (
                         html_mode == "token"
                         and html_end is not None
                         and html_end in block_view
@@ -4055,6 +4092,7 @@ visible_catalog = "\n".join(
     for index, line in enumerate(catalog_visible_lines)
     if index not in hidden_catalog_definitions
 )
+visible_catalog, catalog_code = protect_code_spans(visible_catalog)
 visible_catalog, _catalog_hidden_state = strip_nonrendering_html_regions(
     visible_catalog,
     None,
@@ -4066,6 +4104,7 @@ while visible_catalog != previous_catalog:
     previous_catalog = visible_catalog
     visible_catalog = strip_inline_links(visible_catalog)
 visible_catalog = decode_visible_character_references(visible_catalog)
+visible_catalog = restore_protected_code_text(visible_catalog, catalog_code)
 
 visible_html_catalog = decode_visible_character_references(
     "\n".join(catalog_html_text)
