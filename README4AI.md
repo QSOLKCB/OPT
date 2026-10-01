@@ -47,6 +47,7 @@ Before choosing an optimizer, classify:
 - large AoS traversal needs cache-local bounded hot-field chunks → `OPT-SOA-001`
 - repeated parallel runs pay thread/buffer startup or need explicit physical/logical worker policy → `OPT-POOL-001`
 - several exact execution paths trade places across hosts/workloads → `OPT-AUTO-001`
+- reuse cache repeatedly evicts expensive states before reuse → `OPT-CACHE-001`
 
 ## Important distinctions
 
@@ -58,6 +59,7 @@ Before choosing an optimizer, classify:
 - **SoA tiling**: changes temporary data layout/working-set shape while preserving the logical source/output contract;
 - **persistent pools**: change worker lifetime and lifecycle amortization, not the kernel's semantics;
 - **host-auto promotion**: selects among already-correct paths using live calibration and a fail-closed oracle; it does not make one path universally best;
+- **cache capacity**: controls how much correct reusable state survives until reuse; a larger cache is not automatically better and a fixed cap is not portable across working sets;
 - **approximation**: a contract choice, never a hidden optimization.
 
 ## Status vocabulary
@@ -88,13 +90,14 @@ The frozen v1 records retain their historical release wording and are exempt fro
 - Never treat process-wide RSS gathered across calibration as isolated selected-engine memory evidence.
 - Never let an auto selector hide a parity failure by silently falling back; fail closed and preserve explicit canonical/manual control.
 - Never optimize from stale workload assumptions when fresh measurements are available.
+- Never copy a donor cache-capacity constant or "fix" eviction thrash with an unbounded cache; measure the active reuse working set and enforce the target resource envelope.
 - `suxen.zip` remains unpromoted until inventoried and inspected.
 
 ## What to copy vs what to adapt
 
-Copy the **structure**: equivalence gates, complete signature identity, coalescing ownership, partitioned coordination, density-adaptive representation, shared materialization, adaptive trial ledgers, explicit approximation envelopes, early reduction, critical-path classification, performance budgets, sound bounds, SIMD parity/codegen gates, bounded SoA working sets, persistent-worker lifecycle accounting, and calibrated promotion with independent oracle verification.
+Copy the **structure**: equivalence gates, complete signature identity, coalescing ownership, partitioned coordination, density-adaptive representation, shared materialization, adaptive trial ledgers, explicit approximation envelopes, early reduction, critical-path classification, performance budgets, sound bounds, SIMD parity/codegen gates, bounded SoA working sets, persistent-worker lifecycle accounting, calibrated promotion with independent oracle verification, and cache policies tied to measured reuse working sets plus explicit resource budgets.
 
-Adapt the **numbers and policies**: trial counts, worker caps, hashes, cache sizes, shard counts, bit splits, batch widths, tile sizes, domain-contraction rates, acquisition parameters, tolerances, error limits, benchmark thresholds, calibration sizes/repeats, promotion margins, topology policy and stopping budgets.
+Adapt the **numbers and policies**: trial counts, worker caps, hashes, cache sizes, eviction/admission policy, reuse horizons, shard counts, bit splits, batch widths, tile sizes, domain-contraction rates, acquisition parameters, tolerances, error limits, benchmark thresholds, calibration sizes/repeats, promotion margins, topology policy and stopping budgets.
 
 ## Evidence expected in a new record
 
