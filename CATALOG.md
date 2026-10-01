@@ -24,6 +24,7 @@
 | Large AoS traversal wastes cache/memory and only a bounded hot subset is needed at once | [OPT-SOA-001](optimizations/OPT-SOA-001-worker-local-soa-tiling.md) | Transform bounded per-worker tiles into SoA and reuse cache-local scratch |
 | Repeated parallel runs keep paying thread/buffer startup or misuse SMT topology | [OPT-POOL-001](optimizations/OPT-POOL-001-persistent-topology-aware-worker-pools.md) | Persist workers/buffers and choose physical/logical worker policy explicitly |
 | Several exact execution paths trade places across hosts or workload shapes | [OPT-AUTO-001](optimizations/OPT-AUTO-001-calibrated-host-aware-path-promotion.md) | Calibrate bounded candidates, include lifecycle cost, require margin and fail-closed oracle parity |
+| Reuse cache repeatedly evicts expensive states before their next reuse | [OPT-CACHE-001](optimizations/OPT-CACHE-001-working-set-aware-cache-capacity.md) | Size/manage retention against the measured reuse working set and resource budget |
 
 Before selecting a record, define the target problem using [`OPTIMIZATION-PROBLEM.md`](OPTIMIZATION-PROBLEM.md).
 
@@ -108,6 +109,9 @@ Create workers and local buffers once for repeated dispatches, expose physical/l
 ### OPT-AUTO-001 — Calibrated host-aware path promotion
 Choose among already-correct execution paths using workload-shaped live calibration, lifecycle-aware scoring, a material promotion margin and full-work fail-closed oracle verification.
 
+### OPT-CACHE-001 — Working-set-aware cache capacity
+Keep useful reusable states resident until their next reuse when the measured benefit justifies the memory/resource cost; treat cache capacity, admission and eviction as workload/topology-specific policy rather than universal constants.
+
 ## Composition guidance
 
 Optimizations compose only when their semantic and resource models compose.
@@ -122,6 +126,7 @@ Optimizations compose only when their semantic and resource models compose.
 - pruning is valid only when the bound is sound;
 - SIMD and thread-level parallelism can move the bottleneck to memory bandwidth or CPU frequency limits;
 - SoA tiling and persistent pools multiply worker-local storage by worker count, so cache/RSS behavior must be re-measured together;
-- host-auto selection must calibrate only candidates that already satisfy their own correctness contracts and must not convert a selector heuristic into a universal hardware ranking.
+- host-auto selection must calibrate only candidates that already satisfy their own correctness contracts and must not convert a selector heuristic into a universal hardware ranking;
+- cache-capacity tuning must measure the active reuse working set and total reconstruction cost while enforcing memory/resource limits; fixing thrash by making a cache effectively unbounded merely moves the failure boundary.
 
 Prefer one measured bottleneck removal at a time, then re-profile and reconsider the problem contract.
