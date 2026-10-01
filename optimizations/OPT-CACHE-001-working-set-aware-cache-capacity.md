@@ -21,12 +21,12 @@ This failure can be deceptive because the cache still exists, correctness may re
 ## Optimization problem contract
 
 - X: cache-capacity, admission, retention, eviction and partitioning policies for a declared reusable-state key space and workload/topology, including any bounded dynamic-sizing policy.
-- F: policies that preserve exact externally visible semantics, maintain unambiguous cache-key identity, remain inside the declared memory/resource budget, avoid stale-state reuse, and are evaluated against the target workload's observed reuse working set rather than an imported donor constant.
+- F: policies that preserve exact externally visible semantics, maintain unambiguous cache-key identity, remain inside the declared memory/resource budget, avoid stale-state reuse, publish a newly constructed entry atomically only after its computation and required validation succeed, leave any prior authoritative entry unchanged on failure or cancellation, and are evaluated against the target workload's observed reuse working set rather than an imported donor constant.
 - f: target-measured total cost comprising cache-hit execution, miss/reconstruction cost, eviction/re-admission cost, lookup/metadata overhead, memory footprint and any initialization or synchronization overhead paid by the workload.
 - d: minimize total workload cost subject to the correctness and resource constraints; where memory and latency/throughput trade off, use the target's predeclared weighted, Pareto or lexicographic order rather than silently maximizing hit rate.
 - C: no incorrect aliasing between semantically distinct states, no stale reuse beyond the target validity contract, no unbounded memory growth disguised as optimization, and no performance claim based only on cache hit rate without end-to-end measurement.
-- B: target-specific measurement and tuning budget covering representative reuse-distance/cardinality observation, candidate capacity/policy trials, memory accounting and repeated end-to-end validation.
-- S: stop when a policy satisfies the declared resource envelope and further capacity/policy changes do not produce material end-to-end benefit under the target's predeclared margin, or when the tuning budget is exhausted; retain/revert to the reference policy otherwise.
+- B: a finite, predeclared target-specific budget with an explicit accounting unit and cap (for example candidate evaluations, repeated benchmark samples, wall-clock time, GPU-seconds, or another bounded resource), covering representative live-working-set/reuse-distance observation, candidate capacity/policy trials, memory accounting, environment/noise characterization and repeated end-to-end validation.
+- S: before tuning starts, declare both the hard budget-exhaustion boundary and an operational early-stop rule (for example a bounded window of admissible candidates that fails to clear a noise-aware material-improvement margin). Stop when that rule fires or the finite budget is exhausted; promote only a policy that satisfies the resource envelope and clears a material margin derived from the characterized measurement noise, otherwise retain/revert to the reference policy.
 - Variables: integer, categorical, conditional and mixed
 - Search scope: local
 - Objective behavior: deterministic or noisy depending on workload/runtime
@@ -40,7 +40,9 @@ This failure can be deceptive because the cache still exists, correctness may re
 
 Cache policy may change which reusable state is retained and when reconstruction occurs, but it must not change the externally declared result.
 
-Cache keys must distinguish every state dimension required for correctness. Increasing capacity must never be used to mask an incorrect key. Decreasing capacity must not alter semantics merely because reconstruction becomes more frequent.
+Cache keys must distinguish every state dimension required for correctness. Increasing capacity must never be used to mask an incorrect key. Decreasing capacity must not alter semantics merely because reconstruction becomes more frequent. If multiple source states are intentionally mapped to one key, the target must name the equivalence invariant that justifies the merge and test that invariant directly across representative colliding states before enabling the reduced key cardinality.
+
+A newly constructed cache entry must remain invisible until its computation and required validation complete successfully. Publication must be atomic with respect to readers; failure or cancellation must leave any prior authoritative entry in place rather than exposing partial reusable state.
 
 Memory/resource limits are part of the contract. An unbounded cache that prevents eviction thrash by exhausting VRAM, RAM, file descriptors, disk, or another constrained resource is not a valid implementation of this pattern.
 
@@ -48,22 +50,22 @@ Memory/resource limits are part of the contract. An unbounded cache that prevent
 
 Treat cache capacity as a function of the **active reuse working set**, not as a universal magic number.
 
-For a reuse horizon `H`, define or estimate:
+For a reuse horizon `H`, define or estimate at each observation time `t`:
 
-- `W(H)`: the number of distinct valid cache states whose next reuse occurs within `H`;
-- reuse distance / stack distance for those states where practical;
+- `L_t(H)`: the set of valid reusable states whose retention intervals overlap `t` and whose next reuse (before invalidation) falls within the declared horizon; characterize the distribution of `|L_t(H)|` and, where useful, its peak rather than counting every distinct state that appears anywhere in `H`;
+- reuse distance / stack distance and the resulting miss-ratio curve where practical, because a replacement policy may need more or less capacity than a simple live-set count suggests;
 - reconstruction cost per miss;
 - retained-state memory/resource cost;
 - eviction frequency and premature-eviction rate;
 - end-to-end hit/miss consequences rather than hit rate alone.
 
-A fixed-capacity cache of size `K` is at risk when useful `W(H)` materially exceeds `K` and entries are evicted before their next reuse. Depending on the target, valid remedies can include:
+A fixed-capacity cache of size `K` is at risk when the measured overlapping live-set/reuse-distance distribution shows that useful entries are routinely displaced before their next reuse. Do not infer required capacity from the total number of distinct states observed anywhere in a horizon: for a sequence such as `A,A,B,B,C,C`, three distinct states appear, but capacity one can preserve every immediate reuse. Depending on the target, valid remedies can include:
 
 1. increase capacity only as far as the measured resource budget permits;
 2. derive capacity from workload/topology dimensions that determine reusable-state cardinality;
 3. partition the cache so unrelated state classes do not evict one another;
 4. change admission/retention/eviction policy to protect expensive or soon-reused states;
-5. reduce unnecessary key cardinality only when the merged states are proven semantically equivalent;
+5. reduce unnecessary key cardinality only under a named equivalence invariant, directly tested across representative distinct source states that intentionally collide under the merged key;
 6. shrink individual retained states so more useful entries fit within the same resource envelope;
 7. bypass or disable caching for state classes where retention overhead exceeds reuse benefit.
 
@@ -87,12 +89,15 @@ A target implementation should:
 
 - record cache lookups, hits, misses, insertions, evictions and reconstruction/recapture events;
 - distinguish capacity misses from compulsory/cold misses where practical;
-- measure useful-state cardinality and reuse distance on representative workload phases;
+- measure overlapping live reusable-state cardinality per observation time, plus reuse/stack-distance distributions on representative workload phases;
 - retain an uncached or known-correct reconstruction path as the semantic reference;
 - verify that cached and reconstructed results are equivalent under the target exactness contract;
+- when key cardinality is reduced, name the equivalence invariant and directly test representative distinct source states that collide under the same merged key in both reuse directions, rather than relying only on generic cached-versus-reconstructed parity;
 - test that deliberately small capacities reproduce expected miss/eviction pressure rather than silently changing semantics;
 - test that increasing capacity reduces premature reconstruction only when the working set justifies it;
 - account for the memory/resource cost of retained states;
+- construct candidate entries privately and test that success publishes them atomically, while failure/cancellation exposes no partial entry and leaves any prior authoritative entry usable;
+- characterize benchmark/environment noise before choosing any material-improvement or rollback margin, and derive that margin from the observed variability rather than selecting it after seeing candidate results;
 - test workload/topology changes that alter key cardinality;
 - verify that key changes and capacity changes are isolated experimentally when diagnosing a regression;
 - measure end-to-end latency/throughput and resource use, not only hit rate.
@@ -101,7 +106,7 @@ When possible, include a known-thrash fixture whose active reuse working set exc
 
 ## Target-repo adaptation
 
-Re-profile cache-state cardinality, state size, reuse distance, miss/reconstruction cost, memory budget, concurrency, topology, shape/model dimensions, partitioning and eviction policy.
+Re-profile overlapping live-state cardinality, reuse/stack-distance distribution, state size, miss/reconstruction cost, memory budget, concurrency, topology, shape/model dimensions, partitioning and eviction policy.
 
 Do not copy the donor's `64` cap, the diagnostic `1048576` value, its GPU count, model, context length, split mode, VRAM observations or performance ratios as target defaults.
 
@@ -111,18 +116,20 @@ If capacity is derived dynamically, bind it to explicit measurable dimensions an
 
 - A fixed cap is below the useful reuse working set and causes repeated eviction/reconstruction thrash.
 - An oversized cache removes thrash but exceeds VRAM/RAM/disk or creates paging/allocator pressure that is worse overall.
-- A supposedly equivalent key merge aliases states that are not semantically interchangeable.
+- A supposedly equivalent key merge aliases states that are not semantically interchangeable or was enabled without a named, directly tested equivalence invariant.
 - A high hit rate hides expensive misses on the critical path.
 - Global LRU or similar policy lets one state class evict another class with higher reconstruction cost or shorter reuse distance.
 - Workload phases or topology change after tuning and invalidate the chosen capacity.
 - Concurrent producers inflate transient cardinality beyond the measured single-thread/single-request working set.
 - Cache metadata, locking or lookup cost dominates when retained computations are cheap.
 - A capacity increase appears beneficial only because benchmark warm-up or retained state leaks across trials.
+- A failed or cancelled construction publishes a partial entry or displaces the prior authoritative entry before successful validation.
+- An uncharacterized noisy benchmark makes a candidate appear to clear (or miss) a material-performance margin by ordinary variance.
 - The target confuses lower memory use with better performance when the saved memory came from losing useful retained state.
 
 ## Rollback trigger
 
-Revert or reduce the cache policy when retained-state memory/resource use exceeds the declared envelope, correctness/conformance fails, workload drift makes the tuned policy unstable, or total end-to-end cost no longer improves over the reference policy by the target's predeclared material margin.
+Revert or reduce the cache policy when retained-state memory/resource use exceeds the declared envelope, correctness/conformance fails, workload drift makes the tuned policy unstable, or controlled repeated measurements show that total end-to-end cost no longer improves over the reference policy by the target's predeclared material margin. Characterize the target environment and measurement noise first, derive the enforced margin from that variability, and do not trigger or suppress rollback from a single noisy observation.
 
 If eviction/reconstruction counters rise sharply after a workload/topology change, treat that as a recalibration trigger rather than automatically raising the cap. If a larger cap merely transfers the bottleneck to memory pressure, allocation, synchronization or lookup overhead, revert and re-profile.
 
