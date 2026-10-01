@@ -115,7 +115,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
     def assert_catalog_integrity_ok(self, stdout: str) -> None:
         self.assertRegex(
             stdout,
-            r"(?m)^CATALOG_INTEGRITY_OK records=[1-9]\\d* frozen_v1=5$",
+            r"(?m)^CATALOG_INTEGRITY_OK records=[1-9]\d* frozen_v1=5$",
         )
 
     def run_document_case(self, document: str, fragment: str) -> subprocess.CompletedProcess[str]:
