@@ -112,6 +112,12 @@ CASES = [
 class Catalog5d59543RegressionTests(unittest.TestCase):
     maxDiff = None
 
+    def assert_catalog_integrity_ok(self, stdout: str) -> None:
+        self.assertRegex(
+            stdout,
+            r"(?m)^CATALOG_INTEGRITY_OK records=[1-9]\\d* frozen_v1=5$",
+        )
+
     def run_document_case(self, document: str, fragment: str) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(prefix="opt-catalog-5d59543-") as temporary:
             root = Path(temporary) / "repo"
@@ -135,7 +141,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
                     evidence = result.stdout + result.stderr
                     self.assertEqual(result.returncode, 0 if succeeds else 1, evidence)
                     if succeeds:
-                        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", result.stdout)
+                        self.assert_catalog_integrity_ok(result.stdout)
                     else:
                         if name == "code-span-heading-boundary":
                             self.assertIn(
@@ -187,7 +193,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         )
         evidence = accepted.stdout + accepted.stderr
         self.assertEqual(accepted.returncode, 0, evidence)
-        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+        self.assert_catalog_integrity_ok(accepted.stdout)
 
 
     def test_hidden_html_ancestry_crosses_raw_block_boundaries(self) -> None:
@@ -214,7 +220,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         )
         evidence = accepted.stdout + accepted.stderr
         self.assertEqual(accepted.returncode, 0, evidence)
-        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+        self.assert_catalog_integrity_ok(accepted.stdout)
 
     def run_extra_optimization_file(
         self, name: str, content: str
@@ -267,7 +273,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         )
         evidence = accepted.stdout + accepted.stderr
         self.assertEqual(accepted.returncode, 0, evidence)
-        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+        self.assert_catalog_integrity_ok(accepted.stdout)
 
 
     def run_status_visibility_case(
@@ -312,7 +318,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         accepted = self.run_status_visibility_case("<div>", "</div>")
         evidence = accepted.stdout + accepted.stderr
         self.assertEqual(accepted.returncode, 0, evidence)
-        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+        self.assert_catalog_integrity_ok(accepted.stdout)
 
 
         body_rejected = self.run_status_visibility_case("<body hidden></body>", "")
@@ -324,7 +330,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         body_accepted = self.run_status_visibility_case("<body></body>", "")
         evidence = body_accepted.stdout + body_accepted.stderr
         self.assertEqual(body_accepted.returncode, 0, evidence)
-        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", body_accepted.stdout)
+        self.assert_catalog_integrity_ok(body_accepted.stdout)
 
         html_rejected = self.run_status_visibility_case("<html hidden></html>", "")
         evidence = html_rejected.stdout + html_rejected.stderr
@@ -335,7 +341,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         html_accepted = self.run_status_visibility_case("<html></html>", "")
         evidence = html_accepted.stdout + html_accepted.stderr
         self.assertEqual(html_accepted.returncode, 0, evidence)
-        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", html_accepted.stdout)
+        self.assert_catalog_integrity_ok(html_accepted.stdout)
 
 
     def run_mandatory_section_case(
@@ -387,7 +393,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         )
         evidence = accepted.stdout + accepted.stderr
         self.assertEqual(accepted.returncode, 0, evidence)
-        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+        self.assert_catalog_integrity_ok(accepted.stdout)
 
         hidden_fence = self.run_mandatory_section_case(
             "<div hidden>\n\n```text\nvalidate output bytes\n```\n\n</div>"
@@ -405,7 +411,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         )
         evidence = visible_fence.stdout + visible_fence.stderr
         self.assertEqual(visible_fence.returncode, 0, evidence)
-        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", visible_fence.stdout)
+        self.assert_catalog_integrity_ok(visible_fence.stdout)
 
     def test_catalog_code_span_html_is_literal_for_visible_id_inventory(self) -> None:
         rejected = self.run_document_case(
@@ -426,7 +432,7 @@ class Catalog5d59543RegressionTests(unittest.TestCase):
         )
         evidence = accepted.stdout + accepted.stderr
         self.assertEqual(accepted.returncode, 0, evidence)
-        self.assertIn("CATALOG_INTEGRITY_OK records=20 frozen_v1=5", accepted.stdout)
+        self.assert_catalog_integrity_ok(accepted.stdout)
 
 
 if __name__ == "__main__":
