@@ -38,6 +38,7 @@ The point of this repository is simple: when a future project needs to go faster
 | [OPT-POOL-001](optimizations/OPT-POOL-001-persistent-topology-aware-worker-pools.md) | Persistent topology-aware worker pools | **Implemented external reference** | Reuse workers/buffers across dispatches and choose physical/logical topology explicitly |
 | [OPT-AUTO-001](optimizations/OPT-AUTO-001-calibrated-host-aware-path-promotion.md) | Calibrated host-aware path promotion | **Implemented external reference** | Calibrate equivalent paths on the live host/workload, include lifecycle costs, and promote only with margin + oracle parity |
 | [OPT-CACHE-001](optimizations/OPT-CACHE-001-working-set-aware-cache-capacity.md) | Working-set-aware cache capacity | **Proposed / OPT synthesis** | Size/manage reuse caches against measured working-set cardinality and resource budget to avoid eviction/reconstruction thrash |
+| [OPT-STREAM-001](optimizations/OPT-STREAM-001-bounded-replayable-pair-streams.md) | Bounded replayable pair streams | **Implemented reference** | Enumerate exact combinations from compact inputs; buffer and replay large ties instead of materializing every result |
 
 See [CATALOG.md](CATALOG.md) for the decision map and [README4AI.md](README4AI.md) for machine-oriented usage.
 
@@ -60,6 +61,7 @@ where `d` is the objective direction/order; the remaining components are search 
 - [`sources/MATHEMATICAL-OPTIMIZATION.md`](sources/MATHEMATICAL-OPTIMIZATION.md) — mathematical/combinatorial problem vocabulary and pruning foundations.
 - [`sources/GALAXY-CPU.md`](sources/GALAXY-CPU.md) — merged GALAXY CPU optimization phases covering SIMD/autovectorization, worker-local SoA tiling, persistent topology-aware pools and calibrated host-aware path promotion.
 - [`sources/UNSLOTH-CUDA-GRAPH-CACHE.md`](sources/UNSLOTH-CUDA-GRAPH-CACHE.md) — Unsloth issue #12468 regression evidence motivating working-set-aware cache capacity without promoting donor cache-size constants.
+- [`sources/OPENAI-MATH.md`](sources/OPENAI-MATH.md) — pinned mathematical donor assessment, classical pair-stream attribution, and explicit proof/model limitations.
 - [`power_module.md`](power_module.md) — E8/qutrit DSP architecture that motivated **OPT-DSP-001**.
 - [`sources/SUXEN.md`](sources/SUXEN.md) — provenance and the required bounded recursive inventory procedure for the opaque `suxen.zip` source candidate.
 - [`scripts/inventory_zip.py`](scripts/inventory_zip.py) — bounded recursive ZIP inventory entry point; use the explicit limits documented in `sources/SUXEN.md` rather than generic/unbounded extraction.
@@ -72,3 +74,5 @@ where `d` is the objective direction/order; the remaining components are search 
 ## Add the next optimization
 
 Copy [`templates/OPTIMIZATION-RECORD.md`](templates/OPTIMIZATION-RECORD.md), define the optimization problem contract, assign the next ID, record evidence honestly, and state exactly what correctness property is preserved.
+
+For mathematical or formal donors, use [`EVIDENCE-SCOPE.md`](EVIDENCE-SCOPE.md) to separate input integrity, certificate replay, theorem coverage and target measurements. The [streaming example](examples/bounded_pair_streams.py) has independent oracle tests and a [local allocation benchmark](examples/evidence/pair-stream-reference.json); external donor proofs have not been independently replayed by OPT.
