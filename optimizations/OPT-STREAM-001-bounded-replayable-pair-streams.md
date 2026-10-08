@@ -9,6 +9,7 @@
 - Source note: [OpenAI mathematical manuscripts](../sources/OPENAI-MATH.md), especially the low-space Subset Sum manuscript's `build/streams.tex` filtered-stream and tie-join lemma.
 - The donor credits Schroeppel and Shamir's sorted pair-sum method and later dissection work; this record does not attribute that classical mechanism to OpenAI.
 - OPT code: [integer reference example](../examples/bounded_pair_streams.py), [independent tests](../tests/test_bounded_pair_streams.py), and [measurement procedure](../scripts/benchmark_pair_streams.py).
+- Full-join characterization: [runner](../scripts/benchmark_pair_joins.py), [independent baseline and measurement tests](../tests/test_pair_join_benchmark.py), [raw samples](../examples/evidence/pair-join-reference.json), and [results and limitations](../examples/evidence/pair-join-characterization.md).
 - Licensing boundary: the donor root is Apache-2.0; this is an independently written, narrower integer adaptation. No donor source code or Lean modules are imported.
 
 ### Evidence scope
@@ -64,6 +65,8 @@ The reference keeps the caller's first-array orientation. A target may orient ro
 
 ## Before / after evidence
 
+### Pair enumeration
+
 - Environment: the Python/runtime/platform identity is recorded in [raw local evidence](../examples/evidence/pair-stream-reference.json), alongside SHA-256 identities for the example and measurement script.
 - Workload/fixture: two arrays of 128 integers, producing 16,384 indexed pair sums, consumed by the same ordered hashing sink without retaining output.
 - Cold baseline: snapshot-free materialization and sorting of the full pair product, including initialization and sink work in each sample.
@@ -71,16 +74,24 @@ The reference keeps the caller's first-array orientation. A target may orient ro
 - Small invalidation / partial-work case where relevant: interrupted joins are tested for prefix correctness, not benchmarked here.
 - Large invalidation / full-work case where relevant: every measured pair stream is fully exhausted.
 - Optimized: heap-based pair enumeration under the same ordered output digest and count.
-- Speedup / memory / I/O / quality change: consult the raw samples and medians; the local fixture demonstrates lower traced allocation peak. No RSS, join-performance, practical donor algorithm or portable speedup claim is established.
+- Speedup / memory / I/O / quality change: consult the raw samples and medians; this pair-only fixture demonstrates lower traced allocation peak. It establishes no join performance, RSS, practical donor algorithm or portable speedup claim.
 - Variance / repetitions / raw samples: five samples per path, alternating which runs first; `tracemalloc` is enabled during timing, so these timings are instrumented observations without a promotion threshold.
 
-There is no controlled target-application or tie-join performance benchmark. Input tuples are built before measurement for both paths; algorithm-created storage is included. Consumers that accumulate results must include that storage in their own measurements.
+### Full equal-sum joins
+
+The [full-join characterization](../examples/evidence/pair-join-characterization.md) records 350 samples across seven synthetic fixtures, a materialized sorted-merge baseline, four buffer capacities, five repetitions and two separate measurement modes. Each default fixture has 256 indexed pairs per side; output cardinality ranges from one match to 65,536. Fixtures cover sparse matches, unique keys, oversized duplicate groups, mixed ties, both asymmetric row orientations, and signed large integers.
+
+Both paths consume the entire join through the same non-retaining count and ordered hashing sink. Timing runs with `tracemalloc` disabled; allocation peaks come from separate traced runs without recorded elapsed time. Initialization, sorting, input snapshots, replay copies and consumption are included. Input construction, independent match-count preflight and garbage collection before each sample are excluded. Variant order rotates across repetitions. Exact counts and ordered digests must agree in every sample; changing source bytes during the run also prevents evidence emission.
+
+The raw samples show workload-dependent allocation/latency tradeoffs, including slower streaming paths and weaker allocation savings for asymmetric inputs. Larger buffers can reduce replay latency while increasing retained storage. These observations do not select a portable capacity or establish a target-application benefit, RSS limit or donor resource theorem. Input tuples are built before measurement for both paths; algorithm-created storage is included. Consumers that accumulate results must include that storage in their own measurements.
 
 ## Validation
 
 Run `python3 -m unittest discover -s tests -p test_bounded_pair_streams.py -v`. The independent oracle directly enumerates and sorts all indexed occurrences without using heap/replay code. Tests cover small exhaustive domains, capacities below/at/above tie size, all-equal values, signed and 80-digit integers, empty arrays, immutable input snapshots, independent lookahead-preserving clones, rejection of floats/bools and interrupted prefixes followed by fresh complete runs. `PairSums` snapshots on construction; the join generator snapshots on its first advance and remains isolated from later caller mutations.
 
 Replay measurements with `python3 scripts/benchmark_pair_streams.py --size 128 --repeats 5`. Every sample must match the baseline's ordered digest and exact occurrence count before JSON is emitted. The test suite runs through the existing CI unittest discovery; `python3 scripts/check_catalog.py` checks catalog integration.
+
+Run `python3 -m unittest discover -s tests -p test_pair_join_benchmark.py -v` for the full-join baseline and measurement contracts. Its independent four-loop oracle covers small exhaustive inputs and all fixture shapes; fault injection checks parity rejection, source-change rejection, tracer isolation/cleanup and work-limit admission before fixture allocation. Replay full-join measurements with `python3 scripts/benchmark_pair_joins.py --size 16 --repeats 5 --capacities 1,8,64,256 --max-pairs 4096 --max-matches 1000000`. Pair/match limits bound admitted fixture work; they are not hard byte or deadline enforcement.
 
 ## Target-repo adaptation
 
