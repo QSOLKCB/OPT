@@ -1,17 +1,65 @@
 # OPT — QSOL Optimization Catalog
 
-Reusable, provenance-linked optimization patterns extracted from QSOL projects and carefully bounded external donors.
+[![Release](https://img.shields.io/github/v/release/QSOLKCB/OPT)](https://github.com/QSOLKCB/OPT/releases/latest)
+[![Tests](https://github.com/QSOLKCB/OPT/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/QSOLKCB/OPT/actions/workflows/test.yml)
+[![Catalog integrity](https://github.com/QSOLKCB/OPT/actions/workflows/catalog-integrity.yml/badge.svg?branch=main)](https://github.com/QSOLKCB/OPT/actions/workflows/catalog-integrity.yml)
+[![Lean formalization](https://github.com/QSOLKCB/OPT/actions/workflows/lean-formal.yml/badge.svg?branch=main)](https://github.com/QSOLKCB/OPT/actions/workflows/lean-formal.yml)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23237223-blue)](https://doi.org/10.5281/zenodo.23237223)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-The point of this repository is simple: when a future project needs to go faster, use less memory, avoid redundant work, shorten CI, or tune an expensive system, point the implementing agent here first — **without weakening correctness to make a benchmark look good**.
+OPT is a contract-driven catalog of reusable optimization patterns, with source provenance, explicit evidence boundaries and executable references. Use it to choose ways to reduce latency, memory, repeated work or CI cost while preserving the correctness contract of your application.
 
-## Rules of the vault
+The current release, [**v1.4.0**](https://github.com/QSOLKCB/OPT/releases/tag/v1.4.0), contains **22 optimization records**, exact Python stream references and the preserved Lean model for the five original v1.0.0 records. Its [Zenodo archive and technical report](https://doi.org/10.5281/zenodo.23237223) provide a citable release record.
 
-1. **Correctness outranks speed.** An optimization must preserve the contract it claims to preserve.
-2. **Define the problem before choosing the trick.** Use [`OPTIMIZATION-PROBLEM.md`](OPTIMIZATION-PROBLEM.md) for the search space, feasible set, objective, constraints, budget and stopping rule.
-3. **Measured and proposed work are different things.** Records say which is which.
-4. **Keep the reference path.** Optimized/native/parallel/approximate paths should have a deterministic reference or conformance gate whenever practical.
-5. **Do not cargo-cult constants.** Trial counts, worker caps, cache keys, tolerances, hashes, block sizes, thresholds and search parameters belong to their source environment until re-measured.
-6. **Provenance matters.** Every promoted optimization links back to the code, release, PR, paper, or source that established it.
+## Start here
+
+1. Define the search space, feasible set, objective, correctness constraints, budget and stopping rule with [OPTIMIZATION-PROBLEM.md](OPTIMIZATION-PROBLEM.md).
+2. Use [CATALOG.md](CATALOG.md) to find a mechanism that fits the workload. Read its record's contract, evidence, provenance and limitations before adapting it.
+3. Keep a deterministic reference or conformance gate, then measure the complete lifecycle on the target system. Source timings, cache capacities, worker counts and thresholds need local validation.
+
+[README4AI.md](README4AI.md) gives implementing agents the usage protocol; [AGENTS.md](AGENTS.md) gives repository contributors the maintenance rules. Record statuses distinguish verified mechanisms, implemented references and proposed OPT syntheses. **Correctness outranks speed.**
+
+## What the recent releases add
+
+- [v1.2.0](https://github.com/QSOLKCB/OPT/releases/tag/v1.2.0): the problem-contract framework and a 20-record catalog, including source-backed native vectorization, worker-local tiling, persistent worker pools and calibrated host-aware path promotion.
+- [v1.3.0](https://github.com/QSOLKCB/OPT/releases/tag/v1.3.0): working-set-aware cache capacity, bringing the catalog to 21 records. This remains a proposed synthesis; donor cache-size constants are not portable settings.
+- [v1.4.0](https://github.com/QSOLKCB/OPT/releases/tag/v1.4.0): the 22nd record, bounded replayable pair streams, plus exact equal-sum joins, residue-filtered pair streams, independent oracle tests and reproducible characterization.
+
+The v1.4.0 references include:
+
+| Reference | Behavior |
+| --- | --- |
+| [Pair streams and equal-sum joins](examples/bounded_pair_streams.py) | Enumerate indexed integer pair sums in deterministic order; snapshot and replay stream state; buffer bounded tie groups and replay overflow while preserving all matches. |
+| [Modular pair streams](examples/modular_pair_streams.py) | Enumerate pairs satisfying a declared congruence, using residue buckets for any positive integer modulus, including composite moduli and modulus one. |
+
+Duplicate values retain distinct indices. Modular filtering establishes congruence; it does not establish exact sum equality. A stopped stream prefix does not prove that no later match exists.
+
+The [pair-allocation evidence](examples/evidence/pair-stream-reference.json), [full-join characterization](examples/evidence/pair-join-characterization.md) and [modular-filtering characterization](examples/evidence/modular-pair-stream-characterization.md) document synthetic workloads and their tradeoffs. Lower allocation can come with slower joins; sparse modular workloads can benefit while dense ones do not. These observations do not establish a target-application speedup or a universal default.
+
+## Validate locally
+
+From the repository root, run the Python checks with the standard library:
+
+```sh
+python3 scripts/check_catalog.py
+python3 -m unittest discover -s tests -v
+python3 scripts/check_lean_source.py Lean --self-test
+```
+
+With the Lean toolchain declared in [lean-toolchain](lean-toolchain) installed (currently Lean 4.33.1), build and audit the formal model:
+
+```sh
+lake build
+lake env lean Lean/TrustAudit.lean
+```
+
+CI runs three workflows: **test** checks the Python regression suite and bounded inventory of the bundled source archive; **catalog-integrity** checks record structure, contracts, status vocabulary, README/CATALOG coverage and record links; **lean-formal** verifies the frozen release identity and model blobs, builds the model and audits declaration coverage and permitted axioms. The badges above track `main`.
+
+## Formalization and evidence scope
+
+The immutable v1.0.0 release and its five original records are the target of the pinned Lean model described in [FORMALIZATION.md](FORMALIZATION.md). Later releases preserve the three pinned model files. **Post-v1 records and the Python references do not acquire theorem coverage from that model.**
+
+[EVIDENCE-SCOPE.md](EVIDENCE-SCOPE.md) separates input integrity, certificate replay, theorem coverage and target measurements. The [OpenAI math assessment](sources/OPENAI-MATH.md) records the pinned donor, classical pair-stream attribution and transfer limitations. External donor proofs have not been independently replayed by OPT.
 
 ## Catalog
 
@@ -42,16 +90,6 @@ The point of this repository is simple: when a future project needs to go faster
 
 See [CATALOG.md](CATALOG.md) for the decision map and [README4AI.md](README4AI.md) for machine-oriented usage.
 
-## Formalization boundary
-
-The immutable `v1.0.0` release and its five original records are formalized by the pinned Lean v1 model described in [`FORMALIZATION.md`](FORMALIZATION.md). This catalog expansion is **post-v1**. It does not edit the three pinned v1 Lean model files or pretend the new records are already theorem-backed.
-
-The new [`OPTIMIZATION-PROBLEM.md`](OPTIMIZATION-PROBLEM.md) supplies a canonical problem contract for future records:
-
-`P = (X, F, f, d, C, B, S)`
-
-where `d` is the objective direction/order; the remaining components are search space, feasible set, objective, correctness/semantic constraints, evaluation budget and stopping rule.
-
 ## Source material
 
 - [`sources/WONDERBUILD.md`](sources/WONDERBUILD.md) — incremental execution, scheduling and rebuild-benchmark donor; GPL implementation boundary recorded.
@@ -67,12 +105,16 @@ where `d` is the objective direction/order; the remaining components are search 
 - [`scripts/inventory_zip.py`](scripts/inventory_zip.py) — bounded recursive ZIP inventory entry point; use the explicit limits documented in `sources/SUXEN.md` rather than generic/unbounded extraction.
 - [`suxen.zip`](suxen.zip) — opaque source archive, still **not promoted as optimization evidence** until the bounded inventory identifies reusable mechanisms.
 
-## Integrity gate
+## Contribute
 
-`scripts/check_catalog.py` verifies heading/filename identity, post-v1 status vocabulary, complete contracts, complete README coverage, CATALOG coverage, and optimization-record link labels/targets. CI runs it via `.github/workflows/catalog-integrity.yml`.
+Copy [templates/OPTIMIZATION-RECORD.md](templates/OPTIMIZATION-RECORD.md), define the problem contract, assign the next ID and state the correctness property preserved. Link the source and evidence, label proposals honestly, update the catalog indexes and run the integrity gate. Consult [ROADMAP.md](ROADMAP.md) for assessed candidates and deferred work.
 
-## Add the next optimization
+## Cite v1.4.0
 
-Copy [`templates/OPTIMIZATION-RECORD.md`](templates/OPTIMIZATION-RECORD.md), define the optimization problem contract, assign the next ID, record evidence honestly, and state exactly what correctness property is preserved.
+Slade, T. (2026). OPT v1.4.0: Contract-Driven Optimization and Exact Stream References - Archival Technical Report (Version v1.4.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.23237223
 
-For mathematical or formal donors, use [`EVIDENCE-SCOPE.md`](EVIDENCE-SCOPE.md) to separate input integrity, certificate replay, theorem coverage and target measurements. The [streaming example](examples/bounded_pair_streams.py) and separate [modular pair stream](examples/modular_pair_streams.py) have independent oracle tests, [pair-allocation evidence](examples/evidence/pair-stream-reference.json), [full-join characterization](examples/evidence/pair-join-characterization.md), and [modular-filtering characterization](examples/evidence/modular-pair-stream-characterization.md). These synthetic measurements do not establish target-application benefits; external donor proofs have not been independently replayed by OPT.
+The DOI identifies the v1.4.0 archival record. For a different release, cite its corresponding version and source revision.
+
+## License
+
+Repository code is licensed under [Apache 2.0](LICENSE). The archival technical report is licensed under CC BY 4.0. Donor implementations retain their own licenses and reuse boundaries, recorded in the source notes.
