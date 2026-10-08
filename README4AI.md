@@ -119,6 +119,8 @@ Read `EVIDENCE-SCOPE.md` and `sources/OPENAI-MATH.md` for mathematical donors. R
 
 For `OPT-STREAM-001`, preserve indexed duplicates, complete tie products and lookahead-aware immutable replay state. Charge heap copies, replay, input snapshots and consumer storage; report a resource-stopped prefix as incomplete. The integer example is not the donor's randomized Subset Sum solver and imports no donor proof.
 
+The separate `FilteredPairSums` API generates only pairs satisfying a declared residue condition, with the same actual-sum/index ordering. Use it only for that filtered contract or an independently sound necessary condition. Congruence is not exact equality; arbitrary bucket concatenation does not preserve global ordering. Include residue arithmetic and temporary bucket construction in time/peak-memory measurements, even when eligibility is sparse. The existing exact join remains unfiltered.
+
 ## Formalization boundary
 
 `v1.0.0` contains five immutable Lean-formalized records. Post-v1 catalog records are not theorem-backed merely because they live in the same repository. See `FORMALIZATION.md`.
