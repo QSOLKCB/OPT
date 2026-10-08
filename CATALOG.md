@@ -115,7 +115,7 @@ Keep useful reusable states resident until their next reuse when the measured be
 
 ### OPT-STREAM-001 — Bounded replayable pair streams
 
-An exact integer reference enumerates pair products and full equal-sum Cartesian joins without retaining the entire product or large tie groups. It preserves indexed duplicates and deterministic order. Local pair-allocation evidence and [synthetic full-join characterization](examples/evidence/pair-join-characterization.md) document workload-dependent memory/latency tradeoffs, including regressions. Target performance and external formal proof replay remain unestablished. Account for snapshots, regeneration and consumer-retained output.
+An exact integer reference enumerates pair products and full equal-sum Cartesian joins without retaining the entire product or large tie groups. A separate residue-filtered API generates only eligible indexed pairs while preserving actual-sum/index order; congruence is not exact equality. Local pair-allocation, [full-join](examples/evidence/pair-join-characterization.md), and [modular-filtering](examples/evidence/modular-pair-stream-characterization.md) characterizations document workload-dependent memory/latency tradeoffs, including setup/allocation regressions. Target performance and external formal proof replay remain unestablished. Account for snapshots, regeneration, bucketing and consumer-retained output.
 
 ## Mathematical evidence
 

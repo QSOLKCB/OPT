@@ -18,7 +18,9 @@ Relevant sections:
 
 The manuscript explicitly credits Schroeppel and Shamir's classical sorted pair-sum method, Nederlof and Węgrzycki's later stream descriptions, and earlier dissection algorithms. The reusable OPT adaptation is the storage/replay tradeoff, not a claim that OpenAI invented lazy pair enumeration.
 
-OPT's integer example has no modular filtering, random partitions, prime sampling, overflow-discard decision rule or Subset Sum solver. It preserves indexed duplicates, even though the donor can deduplicate weights in certain disjoint-domain decision-only subproblems. That donor permission cannot be copied into an enumeration/witness API. The inspected family 138 catalogue entry has no Lean coverage link; the stream lemma is treated as a manuscript argument. OPT's own tests and measurements are recorded separately in `OPT-STREAM-001`.
+OPT's original integer pair stream and exact equal-sum join remain unfiltered. The separate [modular pair stream](../examples/modular_pair_streams.py) now adopts the residue-slice mechanism: second-array occurrences are grouped by their residues, each row selects its complementary bucket, and the heap enumerates only eligible pairs. OPT sorts by actual sum and original indices, rather than implementing the donor's direct/complementary modular-key ordering. Arbitrary positive moduli, including composite moduli and one, are supported; no prime assumption is imported. Congruence is not exact sum equality.
+
+Neither OPT API implements random partitions, prime sampling, an overflow-discard decision rule or a Subset Sum solver. Indexed duplicates are preserved, even though the donor can deduplicate weights in certain disjoint-domain decision-only subproblems. That donor permission cannot be copied into an enumeration/witness API. The inspected family 138 catalogue entry has no Lean coverage link; the stream lemma is treated as a manuscript argument. OPT's own tests and separate pair/join/modular measurements are recorded in `OPT-STREAM-001`; external proof replay remains unperformed.
 
 ## Adopted evidence practice: distinguish integrity and proof replay
 

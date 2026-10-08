@@ -74,7 +74,7 @@ Where an optimized transformation is reversible, use forward-then-inverse replay
 
 ## Mathematical donor research: OpenAI math
 
-The pinned assessment is [sources/OPENAI-MATH.md](sources/OPENAI-MATH.md). `OPT-STREAM-001` now contains a narrow exact integer reference and local pair-enumeration allocation evidence. Mathematical/target claims beyond that reference remain separately scoped by [EVIDENCE-SCOPE.md](EVIDENCE-SCOPE.md).
+The pinned assessment is [sources/OPENAI-MATH.md](sources/OPENAI-MATH.md). `OPT-STREAM-001` contains exact pair/full-join references and a separate residue-filtered pair API, with independent oracles and local pair/join/modular characterizations. Modular filtering preserves actual-sum/index order and duplicates; it does not implement a randomized Subset Sum solver. Mathematical/target claims beyond these references remain separately scoped by [EVIDENCE-SCOPE.md](EVIDENCE-SCOPE.md).
 
 ### Candidate: bounded-description dynamic programming
 
