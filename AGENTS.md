@@ -28,3 +28,6 @@ Machine-facing rules for agents using this repository.
 24. New post-v1 records must state status, source identity, optimization problem contract, preserved contract, validation, limitations and rollback conditions.
 25. Run `python3 scripts/check_catalog.py` after catalog changes.
 26. Treat `scripts/check_catalog.py` as the public integrity entrypoint; `scripts/check_catalog_normalizer.py` is its internal CommonMark-normalization helper and must not be invoked as a substitute gate.
+27. For mathematical/formal donors, read `EVIDENCE-SCOPE.md`; distinguish integrity checks, numerical replay, manuscript arguments, selected theorem coverage and target performance. Published replay instructions are not evidence of an executed replay.
+28. For streamed products and joins, preserve indexed multiplicity, exact ordering and complete tie enumeration; account for replay/snapshot work and consumer output storage. A stopped prefix is incomplete, not a negative decision.
+29. Keep external Lean replay separate from the pinned v1 model unless a separately reviewed integration satisfies its toolchain, dependency and axiom gates. Challenge placeholders are not solution proofs.

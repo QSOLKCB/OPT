@@ -1,0 +1,100 @@
+{
+  "claim_boundary": "local reference fixture only; no join, donor theorem, or target speedup claim",
+  "environment": {
+    "machine": "x86_64",
+    "platform": "Linux-6.18.44-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]"
+  },
+  "generated_at_utc": "2026-10-08T09:24:07.692531+00:00",
+  "procedure": {
+    "fixture": "range(size), reversed(range(-size, 0))",
+    "memory": "isolated Python tracemalloc peak; prebuilt inputs excluded; not RSS",
+    "order": "alternating materialized/streamed first",
+    "repeats": 5,
+    "scope": "pair enumeration only; initialization and hashing sink included",
+    "size_per_array": 128,
+    "timing": "tracemalloc enabled; observational, no performance threshold"
+  },
+  "samples": {
+    "materialized": [
+      {
+        "count": 16384,
+        "elapsed_ns": 205262219,
+        "ordered_sha256": "6ca7923b2d83288ddefcd6cb3ad5ed84a6bb21177a863e551c0adbc0dcb62bae",
+        "peak_traced_bytes": 1874512
+      },
+      {
+        "count": 16384,
+        "elapsed_ns": 204457919,
+        "ordered_sha256": "6ca7923b2d83288ddefcd6cb3ad5ed84a6bb21177a863e551c0adbc0dcb62bae",
+        "peak_traced_bytes": 1871552
+      },
+      {
+        "count": 16384,
+        "elapsed_ns": 171659420,
+        "ordered_sha256": "6ca7923b2d83288ddefcd6cb3ad5ed84a6bb21177a863e551c0adbc0dcb62bae",
+        "peak_traced_bytes": 1871552
+      },
+      {
+        "count": 16384,
+        "elapsed_ns": 198320393,
+        "ordered_sha256": "6ca7923b2d83288ddefcd6cb3ad5ed84a6bb21177a863e551c0adbc0dcb62bae",
+        "peak_traced_bytes": 1871552
+      },
+      {
+        "count": 16384,
+        "elapsed_ns": 197430097,
+        "ordered_sha256": "6ca7923b2d83288ddefcd6cb3ad5ed84a6bb21177a863e551c0adbc0dcb62bae",
+        "peak_traced_bytes": 1871552
+      }
+    ],
+    "streamed": [
+      {
+        "count": 16384,
+        "elapsed_ns": 172491032,
+        "ordered_sha256": "6ca7923b2d83288ddefcd6cb3ad5ed84a6bb21177a863e551c0adbc0dcb62bae",
+        "peak_traced_bytes": 23657
+      },
+      {
+        "count": 16384,
+        "elapsed_ns": 133379362,
+        "ordered_sha256": "6ca7923b2d83288ddefcd6cb3ad5ed84a6bb21177a863e551c0adbc0dcb62bae",
+        "peak_traced_bytes": 23649
+      },
+      {
+        "count": 16384,
+        "elapsed_ns": 156096530,
+        "ordered_sha256": "6ca7923b2d83288ddefcd6cb3ad5ed84a6bb21177a863e551c0adbc0dcb62bae",
+        "peak_traced_bytes": 23641
+      },
+      {
+        "count": 16384,
+        "elapsed_ns": 169590714,
+        "ordered_sha256": "6ca7923b2d83288ddefcd6cb3ad5ed84a6bb21177a863e551c0adbc0dcb62bae",
+        "peak_traced_bytes": 23633
+      },
+      {
+        "count": 16384,
+        "elapsed_ns": 150425466,
+        "ordered_sha256": "6ca7923b2d83288ddefcd6cb3ad5ed84a6bb21177a863e551c0adbc0dcb62bae",
+        "peak_traced_bytes": 23625
+      }
+    ]
+  },
+  "schema": "opt.pair-stream-reference-benchmark.v1",
+  "source_sha256": {
+    "examples/bounded_pair_streams.py": "e8c45283a86888e9708c3ae5ef25e79af2f46f52965b425621f1ca6157025de0",
+    "scripts/benchmark_pair_streams.py": "b8e154edf49521d30bca6d35bdb55d86fa100f831ebedefc716b25b89c6e30dd"
+  },
+  "summary": {
+    "materialized": {
+      "median_elapsed_ns": 198320393,
+      "median_peak_traced_bytes": 1871552
+    },
+    "streamed": {
+      "median_elapsed_ns": 156096530,
+      "median_peak_traced_bytes": 23641
+    }
+  }
+}

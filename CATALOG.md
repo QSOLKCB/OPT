@@ -25,6 +25,7 @@
 | Repeated parallel runs keep paying thread/buffer startup or misuse SMT topology | [OPT-POOL-001](optimizations/OPT-POOL-001-persistent-topology-aware-worker-pools.md) | Persist workers/buffers and choose physical/logical worker policy explicitly |
 | Several exact execution paths trade places across hosts or workload shapes | [OPT-AUTO-001](optimizations/OPT-AUTO-001-calibrated-host-aware-path-promotion.md) | Calibrate bounded candidates, include lifecycle cost, require margin and fail-closed oracle parity |
 | Reuse cache repeatedly evicts expensive states before their next reuse | [OPT-CACHE-001](optimizations/OPT-CACHE-001-working-set-aware-cache-capacity.md) | Size/manage retention against the measured reuse working set and resource budget |
+| Materialized combinations or equal-key joins exceed working memory | [OPT-STREAM-001](optimizations/OPT-STREAM-001-bounded-replayable-pair-streams.md) | Heap-stream indexed occurrences and replay oversized ties through a bounded buffer |
 
 Before selecting a record, define the target problem using [`OPTIMIZATION-PROBLEM.md`](OPTIMIZATION-PROBLEM.md).
 
@@ -112,6 +113,14 @@ Choose among already-correct execution paths using workload-shaped live calibrat
 ### OPT-CACHE-001 — Working-set-aware cache capacity
 Keep useful reusable states resident until their next reuse when the measured benefit justifies the memory/resource cost; treat cache capacity, admission and eviction as workload/topology-specific policy rather than universal constants.
 
+### OPT-STREAM-001 — Bounded replayable pair streams
+
+An exact integer reference enumerates pair products and full equal-sum Cartesian joins without retaining the entire product or large tie groups. It preserves indexed duplicates and deterministic order. Local pair-enumeration allocation evidence exists; join/target performance and external formal proof replay remain unestablished. Account for snapshots, regeneration and consumer-retained output.
+
+## Mathematical evidence
+
+Use [EVIDENCE-SCOPE.md](EVIDENCE-SCOPE.md) to state the computational model, hypotheses, guarantee, formal coverage, permitted axioms and independent replay status. The [OpenAI donor assessment](sources/OPENAI-MATH.md) adopts a narrow streaming mechanism and evidence practices while keeping the headline algorithm claims outside OPT's target performance guarantees.
+
 ## Composition guidance
 
 Optimizations compose only when their semantic and resource models compose.
@@ -128,5 +137,6 @@ Optimizations compose only when their semantic and resource models compose.
 - SoA tiling and persistent pools multiply worker-local storage by worker count, so cache/RSS behavior must be re-measured together;
 - host-auto selection must calibrate only candidates that already satisfy their own correctness contracts and must not convert a selector heuristic into a universal hardware ranking;
 - cache-capacity tuning must measure the active reuse working set and total reconstruction cost while enforcing memory/resource limits; fixing thrash by making a cache effectively unbounded merely moves the failure boundary.
+- streamed enumeration reduces retained intermediates but still pays for every required output; replay may dominate at small buffer sizes, and consumers or parallel workers can restore the memory bottleneck.
 
 Prefer one measured bottleneck removal at a time, then re-profile and reconsider the problem contract.

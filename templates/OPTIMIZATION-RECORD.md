@@ -12,6 +12,20 @@ Choose one documented status category from `README4AI.md` and replace every plac
 - Exact files/sections where applicable:
 - Licensing/provenance boundary where code reuse may matter:
 
+### Evidence scope
+
+For mathematical, formal or certificate-backed donors, complete the fields below using `EVIDENCE-SCOPE.md`. For other donors, explain which fields do not apply and why, or remove this subsection without implying mathematical proof coverage. These fields are authoring guidance; the structural catalog gate does not execute proofs or certify their truth.
+
+- Computational model:
+- Hypotheses / declared domain:
+- Guarantee and quantifiers:
+- Formal coverage:
+- Proof target and toolchain:
+- Axiom allowance:
+- Certificate replay commands and scope:
+- Independent replay status and retained evidence:
+- Performance transfer boundary:
+
 ## Problem
 
 What dominates runtime, latency, memory, I/O, CI cost, quality budget or optimization-evaluation cost?

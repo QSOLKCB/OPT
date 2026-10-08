@@ -48,6 +48,7 @@ Before choosing an optimizer, classify:
 - repeated parallel runs pay thread/buffer startup or need explicit physical/logical worker policy → `OPT-POOL-001`
 - several exact execution paths trade places across hosts/workloads → `OPT-AUTO-001`
 - reuse cache repeatedly evicts expensive states before reuse → `OPT-CACHE-001`
+- materialized pair products or equal-key groups exceed working memory → `OPT-STREAM-001`
 
 ## Important distinctions
 
@@ -61,6 +62,7 @@ Before choosing an optimizer, classify:
 - **host-auto promotion**: selects among already-correct paths using live calibration and a fail-closed oracle; it does not make one path universally best;
 - **cache capacity**: controls how much correct reusable state survives until reuse; a larger cache is not automatically better and a fixed cap is not portable across working sets;
 - **approximation**: a contract choice, never a hidden optimization.
+- **streaming/replay**: retains less intermediate state while regenerating exact occurrences; it does not reduce required output count or authorize pruning.
 
 ## Status vocabulary
 
@@ -110,6 +112,12 @@ At minimum record:
 - benchmark environment or an explicit statement that no benchmark exists;
 - failure/rollback condition;
 - whether the change affects latency, throughput, memory, I/O, CI time, quality or only architecture.
+
+## Mathematical donor evidence
+
+Read `EVIDENCE-SCOPE.md` and `sources/OPENAI-MATH.md` for mathematical donors. Record the cost model, assumptions, guarantee quantifiers, selected proof coverage, exact solution target, toolchain/dependencies, permitted axioms, certificate commands and independently executed replay status. File integrity, numerical replay, manuscript reasoning, Lean proof and target performance are separate evidence classes. The catalog structure checker does not establish their truth.
+
+For `OPT-STREAM-001`, preserve indexed duplicates, complete tie products and lookahead-aware immutable replay state. Charge heap copies, replay, input snapshots and consumer storage; report a resource-stopped prefix as incomplete. The integer example is not the donor's randomized Subset Sum solver and imports no donor proof.
 
 ## Formalization boundary
 

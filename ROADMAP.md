@@ -72,6 +72,22 @@ Regenerate deterministic control/schedule state from compact seeds or round/cell
 
 Where an optimized transformation is reversible, use forward-then-inverse replay as supplementary correctness evidence and require restoration of the original state under the declared exactness contract. Also require a forward-result oracle—direct parity with a trusted reference output or independent semantic invariants—so mutually consistent forward/inverse defects cannot pass merely because they round-trip. This is valuable validation guidance, but it is not automatically a performance optimization and should not be promoted as one without an independent objective win.
 
+## Mathematical donor research: OpenAI math
+
+The pinned assessment is [sources/OPENAI-MATH.md](sources/OPENAI-MATH.md). `OPT-STREAM-001` now contains a narrow exact integer reference and local pair-enumeration allocation evidence. Mathematical/target claims beyond that reference remain separately scoped by [EVIDENCE-SCOPE.md](EVIDENCE-SCOPE.md).
+
+### Candidate: bounded-description dynamic programming
+
+Explore whether a target's repeated subproblems can be represented by small boundary/interface descriptions, with a recurrence that is sound and complete under a declared domain. Family 124 supplies a three-identical-machine, unit-job scheduling example; its polynomial bound has degree 150020. It does not supply a practical generic worker scheduler. Before promotion, isolate a tractable target recurrence, retain all predecessor/interface information needed for reconstruction, compare exact outcomes with exhaustive small-domain oracles, measure state-generation/transition/reconstruction costs, and demonstrate a target objective win. Arbitrary job durations or worker counts require new arguments.
+
+### Candidate: online placement with explicit movement costs
+
+Family 110's randomized k-server results motivate studying placement/migration when the target has a genuine metric movement objective. First define whether requests are oblivious, which movement and service costs are charged, how initialization and additive terms are bounded, and whether a randomized policy fits the correctness contract. Compare with a target baseline and offline small-instance oracle; measure preprocessing, per-request work, memory and actual service latency. A movement-competitive ratio is not cache hit-rate, cache-capacity or wall-time evidence, and the donor's additive constant need not be practical.
+
+### Deferred algorithm claims
+
+Matrix multiplication and exact Fourier exponents remain arithmetic-model donors, not native CPU/DSP replacements. Query-efficient log-concave sampling permits unrestricted computation between queries and has narrow conditioning/oracle assumptions. Dimension-reduction existence claims do not provide a measured executable embedding. Revisit these only with a faithful implementation, explicit precision/cost model and target-specific correctness plus full lifecycle measurements. Do not add catalog records solely because a headline asymptotic bound appears better.
+
 ## Promotion rule
 
 A roadmap candidate becomes a catalog record only when it has:

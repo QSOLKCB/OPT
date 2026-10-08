@@ -76,6 +76,8 @@ The mechanism is subordinate to the contract. Do not reshape the problem after s
 
 ## Measurement rule
 
+For mathematical donors, additionally declare the computational model and guarantee quantifiers using `EVIDENCE-SCOPE.md`: arithmetic operations, bit operations, oracle queries and wall time are different objectives. State whether preprocessing, replay, allocations, communication and consumer work are charged; distinguish worst-case from expected/probabilistic guarantees and subsequential from all-input results. These evidence fields supplement the eight canonical classification dimensions above.
+
 Source-project constants and historical observations are priors, not targets. Transfer requires fresh target-context measurement and validation.
 
 See `FORMALIZATION.md` for the frozen v1.0.0 Lean boundary. This problem-contract layer is post-v1 catalog guidance and does not mutate the pinned v1 formal model.
