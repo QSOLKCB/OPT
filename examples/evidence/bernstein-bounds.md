@@ -62,8 +62,10 @@ An inconclusive enclosure does not imply the function violates the bound.
 
 The producer probes endpoints and midpoints only to find exact witnesses.
 Such samples never certify a universal bound. A `violated` result must include
-a point in the domain with positive denominator and residual below zero (or
-zero for a strict claim). `invalid_domain` requires an exact nonpositive
+a point in the domain with residual below zero (or zero for a strict claim),
+plus strictly positive denominator coefficients on every leaf of the full
+partition. An unresolved denominator precondition prevents a `violated` result;
+a witnessed nonpositive denominator takes priority as `invalid_domain`. `invalid_domain` requires an exact nonpositive
 denominator witness. This denotes failure of this API's positive-denominator
 precondition, not necessarily a pole: a negative denominator also fails it.
 The API does not cancel common factors to bypass a denominator zero.

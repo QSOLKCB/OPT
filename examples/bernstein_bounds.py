@@ -145,31 +145,34 @@ def certify(problem, max_splits=16):
     while True:
         leaves = []
         unresolved = []
+        denominator_unresolved = []
+        violation = None
+        invalid_domain = None
         for path in paths:
             left, right = interval(a, b, path)
             pc, dc = coefficients(p, left, right), coefficients(d, left, right)
             leaves.append({'path': path, 'residual': list(map(str, pc)), 'denominator': list(map(str, dc))})
             if not sufficient(pc, dc, strict):
                 unresolved.append(path)
+            if min(dc) <= 0:
+                denominator_unresolved.append(path)
             for x in (left, (left+right)/2, right):
                 den, residual = evaluate(d, x), evaluate(p, x)
-                if den <= 0:
-                    witness = {'x': str(x), 'kind': 'invalid_domain'}
-                    break
-                if residual < 0 or (strict and residual == 0):
-                    witness = {'x': str(x), 'kind': 'violation'}
-                    break
-            if witness:
-                break
-        if witness:
-            # Retain complete coverage even when an early witness terminates.
-            leaves = []
-            for path in paths:
-                left, right = interval(a, b, path)
-                leaves.append({'path': path, 'residual': list(map(str, coefficients(p, left, right))),
-                               'denominator': list(map(str, coefficients(d, left, right)))})
-            status = 'invalid_domain' if witness['kind'] == 'invalid_domain' else 'violated'
+                if den <= 0 and invalid_domain is None:
+                    invalid_domain = {'x': str(x), 'kind': 'invalid_domain'}
+                elif den > 0 and (residual < 0 or (strict and residual == 0)) and violation is None:
+                    violation = {'x': str(x), 'kind': 'violation'}
+        if invalid_domain:
+            witness, status = invalid_domain, 'invalid_domain'
             break
+        if violation and not denominator_unresolved:
+            witness, status = violation, 'violated'
+            break
+        # Resolve the global denominator precondition before classifying a
+        # local bound failure. Never spend the budget refining negative R
+        # while an unrelated denominator leaf still needs proof.
+        if violation:
+            unresolved = denominator_unresolved
         if not unresolved:
             status = 'certified'
             break
@@ -198,6 +201,7 @@ def verify(problem, certificate):
     require(type(leaves) is list and 1 <= len(leaves) <= budget+1, 'invalid leaf budget')
     cursor = a
     all_proved = True
+    denominator_proved = True
     for leaf in leaves:
         require(type(leaf) is dict and set(leaf) == {'path', 'residual', 'denominator'}, 'invalid leaf schema')
         left, right = interval(a, b, leaf['path'])
@@ -206,6 +210,7 @@ def verify(problem, certificate):
         pc = reconstruct(p, left, right, leaf['residual'])
         dc = reconstruct(d, left, right, leaf['denominator'])
         all_proved = all_proved and sufficient(pc, dc, strict)
+        denominator_proved = denominator_proved and min(dc) > 0
     require(cursor == b, 'incomplete domain coverage')
     witness = certificate['witness']
     if witness is not None:
@@ -222,7 +227,7 @@ def verify(problem, certificate):
             require(den <= 0, 'false denominator witness')
             status = 'invalid_domain'
         else:
-            require(witness['kind'] == 'violation' and den > 0 and
+            require(witness['kind'] == 'violation' and denominator_proved and den > 0 and
                     (residual < 0 or (strict and residual == 0)), 'false violation witness')
             status = 'violated'
     else:

@@ -43,6 +43,19 @@ class BernsteinTests(unittest.TestCase):
         self.assertEqual(certify(p, 1)['status'], 'certified')
         self.assertEqual(certify(problem(['1'], d=['1/1000000', '1']))['status'], 'certified')
 
+    def test_global_denominator_before_violation(self):
+        crossing = problem(['-1'], d=['1', '-2'])
+        self.assertEqual(certify(crossing)['status'], 'invalid_domain')
+        forged = certify(crossing)
+        forged.update(status='violated', witness={'x': '0', 'kind': 'violation'})
+        with self.assertRaises(ValueError):
+            verify(crossing, forged)
+        positive = problem(['-1'], d=['13/50', '-1', '1'])
+        self.assertEqual(certify(positive, 0)['status'], 'inconclusive')
+        self.assertEqual(certify(positive, 1)['status'], 'violated')
+        nondyadic_zero = problem(['-1'], d=['1/9', '-2/3', '1'])
+        self.assertEqual(certify(nondyadic_zero, 16)['status'], 'inconclusive')
+
     def test_certificate_mutations(self):
         p = problem(['13/50', '-1', '1'], '1/100')
         c = certify(p, 1)
