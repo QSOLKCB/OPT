@@ -18,6 +18,12 @@ jobs:
       - name: Run ZIP inventory regression tests
         run: python3 -m unittest discover -s tests -v
 
+      - name: Replay exact Bernstein evidence (normal and optimized Python)
+        run: |
+          python3 scripts/check_bernstein.py
+          python3 -O scripts/check_bernstein.py
+          python3 -O -m unittest discover -s tests -p "test_bernstein_bounds.py" -v
+
       - name: Audit bundled suxen archive
         shell: bash
         run: |
@@ -50,3 +56,4 @@ jobs:
             echo 'Bundled suxen inventory did not produce a complete result' >&2
             exit 1
           fi
+

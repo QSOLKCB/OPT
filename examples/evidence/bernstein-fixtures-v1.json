@@ -1,0 +1,495 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "name": "direct",
+      "problem": {
+        "numerator": [
+          "1",
+          "1"
+        ],
+        "denominator": [
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "0",
+        "strict": false
+      },
+      "expected_status": "certified",
+      "certificate": {
+        "problem_sha256": "0b0e184dc74cac069fc92cb1ab6f7efccb32f8c8316508d255ed5b88408b625b",
+        "max_splits": 0,
+        "status": "certified",
+        "leaves": [
+          {
+            "path": "",
+            "residual": [
+              "1",
+              "2"
+            ],
+            "denominator": [
+              "1"
+            ]
+          }
+        ],
+        "witness": null
+      }
+    },
+    {
+      "name": "coarse_inconclusive",
+      "problem": {
+        "numerator": [
+          "13/50",
+          "-1",
+          "1"
+        ],
+        "denominator": [
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "1/100",
+        "strict": false
+      },
+      "expected_status": "inconclusive",
+      "certificate": {
+        "problem_sha256": "ba499f6906367badf4e0eda661a6329b4b8fde9a31a74f5bb28b311342ad0b36",
+        "max_splits": 0,
+        "status": "inconclusive",
+        "leaves": [
+          {
+            "path": "",
+            "residual": [
+              "1/4",
+              "-1/4",
+              "1/4"
+            ],
+            "denominator": [
+              "1"
+            ]
+          }
+        ],
+        "witness": null
+      }
+    },
+    {
+      "name": "subdivision",
+      "problem": {
+        "numerator": [
+          "13/50",
+          "-1",
+          "1"
+        ],
+        "denominator": [
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "1/100",
+        "strict": false
+      },
+      "expected_status": "certified",
+      "certificate": {
+        "problem_sha256": "ba499f6906367badf4e0eda661a6329b4b8fde9a31a74f5bb28b311342ad0b36",
+        "max_splits": 1,
+        "status": "certified",
+        "leaves": [
+          {
+            "path": "0",
+            "residual": [
+              "1/4",
+              "0",
+              "0"
+            ],
+            "denominator": [
+              "1"
+            ]
+          },
+          {
+            "path": "1",
+            "residual": [
+              "0",
+              "0",
+              "1/4"
+            ],
+            "denominator": [
+              "1"
+            ]
+          }
+        ],
+        "witness": null
+      }
+    },
+    {
+      "name": "real_violation",
+      "problem": {
+        "numerator": [
+          "-1",
+          "1"
+        ],
+        "denominator": [
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "0",
+        "strict": false
+      },
+      "expected_status": "violated",
+      "certificate": {
+        "problem_sha256": "6465430d058213bd396f51abdde8e03a094d500a05c24d5057f1a25a940cb100",
+        "max_splits": 1,
+        "status": "violated",
+        "leaves": [
+          {
+            "path": "",
+            "residual": [
+              "-1",
+              "0"
+            ],
+            "denominator": [
+              "1"
+            ]
+          }
+        ],
+        "witness": {
+          "x": "0",
+          "kind": "violation"
+        }
+      }
+    },
+    {
+      "name": "boundary_nonstrict",
+      "problem": {
+        "numerator": [
+          "0",
+          "0",
+          "1"
+        ],
+        "denominator": [
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "0",
+        "strict": false
+      },
+      "expected_status": "certified",
+      "certificate": {
+        "problem_sha256": "3844f2019ce62898c462f0f6296a45b0fdb6aacab94711194b257b85d1c3a90f",
+        "max_splits": 0,
+        "status": "certified",
+        "leaves": [
+          {
+            "path": "",
+            "residual": [
+              "0",
+              "0",
+              "1"
+            ],
+            "denominator": [
+              "1"
+            ]
+          }
+        ],
+        "witness": null
+      }
+    },
+    {
+      "name": "boundary_strict",
+      "problem": {
+        "numerator": [
+          "0",
+          "0",
+          "1"
+        ],
+        "denominator": [
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "0",
+        "strict": true
+      },
+      "expected_status": "violated",
+      "certificate": {
+        "problem_sha256": "0febb8811ccc171190ad19e4de925fafa6bfeea1a8e00162ad58121315b273c3",
+        "max_splits": 0,
+        "status": "violated",
+        "leaves": [
+          {
+            "path": "",
+            "residual": [
+              "0",
+              "0",
+              "1"
+            ],
+            "denominator": [
+              "1"
+            ]
+          }
+        ],
+        "witness": {
+          "x": "0",
+          "kind": "violation"
+        }
+      }
+    },
+    {
+      "name": "rational_positive",
+      "problem": {
+        "numerator": [
+          "1"
+        ],
+        "denominator": [
+          "1",
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "0",
+        "strict": false
+      },
+      "expected_status": "certified",
+      "certificate": {
+        "problem_sha256": "0a737ff9cffbf8a227a683b95c3af8178e7df000688f41f46eaa748d21cc25ed",
+        "max_splits": 0,
+        "status": "certified",
+        "leaves": [
+          {
+            "path": "",
+            "residual": [
+              "1"
+            ],
+            "denominator": [
+              "1",
+              "2"
+            ]
+          }
+        ],
+        "witness": null
+      }
+    },
+    {
+      "name": "denominator_crossing",
+      "problem": {
+        "numerator": [
+          "1"
+        ],
+        "denominator": [
+          "-1",
+          "2"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "0",
+        "strict": false
+      },
+      "expected_status": "invalid_domain",
+      "certificate": {
+        "problem_sha256": "19a60235f070a4b92a56958574accc8aeac187915da2c5b40a69eba45f5a791b",
+        "max_splits": 1,
+        "status": "invalid_domain",
+        "leaves": [
+          {
+            "path": "",
+            "residual": [
+              "1"
+            ],
+            "denominator": [
+              "-1",
+              "1"
+            ]
+          }
+        ],
+        "witness": {
+          "x": "0",
+          "kind": "invalid_domain"
+        }
+      }
+    },
+    {
+      "name": "denominator_zero_even_cancelled",
+      "problem": {
+        "numerator": [
+          "0"
+        ],
+        "denominator": [
+          "0",
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "0",
+        "strict": false
+      },
+      "expected_status": "invalid_domain",
+      "certificate": {
+        "problem_sha256": "04fb9f1dba3fddc48de4c768af7ca6acb81b327e393fdc14466a60c1f3b7a7da",
+        "max_splits": 1,
+        "status": "invalid_domain",
+        "leaves": [
+          {
+            "path": "",
+            "residual": [
+              "0"
+            ],
+            "denominator": [
+              "0",
+              "1"
+            ]
+          }
+        ],
+        "witness": {
+          "x": "0",
+          "kind": "invalid_domain"
+        }
+      }
+    },
+    {
+      "name": "denominator_near_zero",
+      "problem": {
+        "numerator": [
+          "1"
+        ],
+        "denominator": [
+          "1/1000000",
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "0",
+        "strict": false
+      },
+      "expected_status": "certified",
+      "certificate": {
+        "problem_sha256": "5e173e1b1106bd1696366ac97a621e1e1b7539e693583065bc531f77c55b366f",
+        "max_splits": 0,
+        "status": "certified",
+        "leaves": [
+          {
+            "path": "",
+            "residual": [
+              "1"
+            ],
+            "denominator": [
+              "1/1000000",
+              "1000001/1000000"
+            ]
+          }
+        ],
+        "witness": null
+      }
+    },
+    {
+      "name": "denominator_coarse",
+      "problem": {
+        "numerator": [
+          "1"
+        ],
+        "denominator": [
+          "13/50",
+          "-1",
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "0",
+        "strict": false
+      },
+      "expected_status": "inconclusive",
+      "certificate": {
+        "problem_sha256": "a24a304b791f89b69495aeef1be0795db49f5cfef82268ba62a1041eb3a2bcfa",
+        "max_splits": 0,
+        "status": "inconclusive",
+        "leaves": [
+          {
+            "path": "",
+            "residual": [
+              "1"
+            ],
+            "denominator": [
+              "13/50",
+              "-6/25",
+              "13/50"
+            ]
+          }
+        ],
+        "witness": null
+      }
+    },
+    {
+      "name": "denominator_subdivision",
+      "problem": {
+        "numerator": [
+          "1"
+        ],
+        "denominator": [
+          "13/50",
+          "-1",
+          "1"
+        ],
+        "domain": [
+          "0",
+          "1"
+        ],
+        "lower": "0",
+        "strict": false
+      },
+      "expected_status": "certified",
+      "certificate": {
+        "problem_sha256": "a24a304b791f89b69495aeef1be0795db49f5cfef82268ba62a1041eb3a2bcfa",
+        "max_splits": 1,
+        "status": "certified",
+        "leaves": [
+          {
+            "path": "0",
+            "residual": [
+              "1"
+            ],
+            "denominator": [
+              "13/50",
+              "1/100",
+              "1/100"
+            ]
+          },
+          {
+            "path": "1",
+            "residual": [
+              "1"
+            ],
+            "denominator": [
+              "1/100",
+              "1/100",
+              "13/50"
+            ]
+          }
+        ],
+        "witness": null
+      }
+    }
+  ]
+}
