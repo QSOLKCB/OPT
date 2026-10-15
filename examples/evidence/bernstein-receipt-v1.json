@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "recipient_base": "ae58b8b52e1b50e5da754ecc37b62d430809b23a",
+  "source": "https://shemesh.larc.nasa.gov/fm/papers/jar-mn-2012-draft.pdf",
+  "method": "Munoz and Narkawicz 2013, Proposition 3 and Corollary 1; original Python implementation; no PVS replay",
+  "sha256": {
+    "examples/bernstein_bounds.py": "e0dd8cc513f0896aa7772a7de9e54719c7be8b69c6cd9718e710bc8242ca3d5e",
+    "tests/test_bernstein_bounds.py": "945ec10ea47fdfc60748855a8c616f8c7f45d625e5d62b58e94b7589844032d2",
+    "scripts/check_bernstein.py": "739a3fe45dc4abe83c64fe93e6381c65a5c35f713bf3bbfcb0a5bd013ddbc48e",
+    "examples/evidence/bernstein-fixtures-v1.json": "d70fcdd6ddce091203ddd0cc0e2d133260f203631d0d68a589ae50e9045e493f"
+  },
+  "outcomes": {
+    "direct": "certified",
+    "coarse_inconclusive": "inconclusive",
+    "subdivision": "certified",
+    "real_violation": "violated",
+    "boundary_nonstrict": "certified",
+    "boundary_strict": "violated",
+    "rational_positive": "certified",
+    "denominator_crossing": "invalid_domain",
+    "denominator_zero_even_cancelled": "invalid_domain",
+    "denominator_near_zero": "certified",
+    "denominator_coarse": "inconclusive",
+    "denominator_subdivision": "certified"
+  },
+  "observations": {
+    "python": "3.12.14",
+    "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+    "seconds": 0.009846768996794708,
+    "tracemalloc_peak_bytes": 16744,
+    "max_coefficient_bits": 20,
+    "subdivisions": 2
+  },
+  "scope": "Exact univariate lower bounds on explicit closed rational intervals; denominator strictly positive. No runtime speedup, floating-point guarantee, general optimization completeness, or Lean/PVS proof."
+}

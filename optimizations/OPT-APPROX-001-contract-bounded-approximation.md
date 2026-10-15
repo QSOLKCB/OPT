@@ -78,3 +78,15 @@ Unmeasured quality loss, biased sampling, hidden rare-case failures, **claiming 
 ## Rollback trigger
 
 Evaluate rollback against the **declared envelope semantics and certification procedure**. For a hard pointwise/worst-case contract, disable/fall back immediately on any proven bound violation, **any failure of the analytic/formal/exhaustive proof obligations, or any runtime case in which the guard cannot prove the bound before publication**; a runtime-enforced design must use the exact path for such unproved cases rather than emit the approximation. A sampled counterexample to a hard envelope is an immediate violation, but absence of sampled counterexamples is never sufficient certification of a non-finite-domain hard guarantee. For a stochastic/statistical contract, disable when the predeclared aggregation, confidence, exceedance-probability, quantile, or tail criterion fails under its stated **selection-aware certification** procedure; an isolated sample beyond a nominal pointwise value is not by itself a contract violation unless the contract says it is. Treat a selected policy as uncertified—and disable or fall back—if held-out certification fails, if tuning and certification evidence are mixed contrary to the declared procedure, or if the simultaneous/multiple-testing/selective-inference assumptions required for data reuse are violated. In all cases, disable when cumulative/state drift violates its declared bound, reset/checkpoint validation fails, reference comparisons violate C, a catastrophic semantic/safety constraint is breached, or resource savings are not material.
+
+
+## Executable exact polynomial instance
+
+The [Bernstein bound worked example](../examples/evidence/bernstein-bounds.md)
+implements a bounded, exact univariate certificate over an explicit closed
+rational interval. Its checker reconstructs polynomial identities and verifies
+complete domain coverage, denominator positivity and strictness. It returns
+`inconclusive` when finite subdivision cannot prove the bound, and requires an
+exact point witness for a violation. This is an implemented numerical-rigor
+example of the hard-envelope requirement, not a general optimization solver,
+floating-point implementation guarantee, speedup or new Lean/PVS proof.
