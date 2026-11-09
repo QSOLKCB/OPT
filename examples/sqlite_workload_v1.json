@@ -1,0 +1,34 @@
+{
+  "schema": "opt.sqlite.workload.v1",
+  "queries": [
+    {
+      "name": "session_latest",
+      "sql": "SELECT message_id, role, classification FROM messages WHERE conversation_id=? ORDER BY message_id DESC LIMIT ?",
+      "params": [
+        "session-0005",
+        8
+      ]
+    },
+    {
+      "name": "session_count",
+      "sql": "SELECT COUNT(*) FROM messages WHERE conversation_id=?",
+      "params": [
+        "session-0005"
+      ]
+    },
+    {
+      "name": "recent_sessions",
+      "sql": "SELECT conversation_id, updated_utc FROM conversations ORDER BY updated_utc DESC LIMIT ?",
+      "params": [
+        10
+      ]
+    },
+    {
+      "name": "message_classification",
+      "sql": "SELECT classification, COUNT(*) FROM messages WHERE conversation_id=? GROUP BY classification ORDER BY classification",
+      "params": [
+        "session-0005"
+      ]
+    }
+  ]
+}

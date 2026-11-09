@@ -26,6 +26,7 @@
 | Several exact execution paths trade places across hosts or workload shapes | [OPT-AUTO-001](optimizations/OPT-AUTO-001-calibrated-host-aware-path-promotion.md) | Calibrate bounded candidates, include lifecycle cost, require margin and fail-closed oracle parity |
 | Reuse cache repeatedly evicts expensive states before their next reuse | [OPT-CACHE-001](optimizations/OPT-CACHE-001-working-set-aware-cache-capacity.md) | Size/manage retention against the measured reuse working set and resource budget |
 | Materialized combinations or equal-key joins exceed working memory | [OPT-STREAM-001](optimizations/OPT-STREAM-001-bounded-replayable-pair-streams.md) | Heap-stream indexed occurrences and replay oversized ties through a bounded buffer |
+| SQLite queries need index/plan evidence before safe tuning | [OPT-DB-001](optimizations/OPT-DB-001-evidence-gated-sqlite-observatory.md) | Inspect schema/plans read-only; optionally measure bounded SELECT baselines without authorizing DDL |
 
 Before selecting a record, define the target problem using [`OPTIMIZATION-PROBLEM.md`](OPTIMIZATION-PROBLEM.md).
 
@@ -116,6 +117,10 @@ Keep useful reusable states resident until their next reuse when the measured be
 ### OPT-STREAM-001 — Bounded replayable pair streams
 
 An exact integer reference enumerates pair products and full equal-sum Cartesian joins without retaining the entire product or large tie groups. A separate residue-filtered API generates only eligible indexed pairs while preserving actual-sum/index order; congruence is not exact equality. Local pair-allocation, [full-join](examples/evidence/pair-join-characterization.md), and [modular-filtering](examples/evidence/modular-pair-stream-characterization.md) characterizations document workload-dependent memory/latency tradeoffs, including setup/allocation regressions. Target performance and external formal proof replay remain unestablished. Account for snapshots, regeneration, bucketing and consumer-retained output.
+
+### OPT-DB-001 — Evidence-gated SQLite observatory
+
+A first-party Python standard-library inspector inventories SQLite schema/indexes, uses deny-by-default query admission and EXPLAIN QUERY PLAN for up to 16 parameterized SELECTs, and optionally hashes complete bounded result streams with retained latency samples. It creates owner-private 0600 report files and refuses production DDL, schema tuning, output truncation and unsafe SQL. The default is **explain-only**, and even measured results are *baseline evidence*, not demonstrated index optimization. The companion synthetic fixture and offline tests require no real database content. A read-only live WAL connection can create coordination sidecars; use immutable mode only for a genuinely frozen standalone snapshot.
 
 ## Mathematical evidence
 
