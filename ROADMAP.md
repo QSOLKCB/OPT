@@ -1,5 +1,13 @@
 # OPT Roadmap
 
+## New implementation — OPT-DB-001 SQLite query/index observatory (9 November 2026)
+
+**Implemented for review, not a released speedup:** [OPT-DB-001](optimizations/OPT-DB-001-evidence-gated-sqlite-observatory.md) adds a Python-stdlib, read-only SQLite observatory: bounded JSON workloads, schema/index inventory, EXPLAIN QUERY PLAN, optional explicitly requested full-result-bounded latency sampling, typed result digests and private no-clobber reports. A deterministic synthetic generator and offline adverse-case tests preserve source rows. A normal SQLite `mode=ro` reader may create WAL coordination files; genuine immutable mode is restricted to standalone DELETE snapshots. No live DDL, PRAGMA optimize, VACUUM, schema migration, training or production Trinite runtime change is authorized.
+
+**OPT-DB-002 (future, separate PR):** owner-selected *disposable* verified snapshots; enumerate a tiny predeclared candidate index set; measure full SELECT result parity plus insertion/update latency, WAL/backup size, cold/warm effects and trial budget before recommending a candidate. A scan is not automatically deficient, an index is not automatically beneficial. Keep the canonical original unchanged and never run candidate DDL on the live database.
+
+**OPT-DB-003 (future, separately authorized):** propose reviewable reversible migration scripts only after a candidate passes OPT-DB-002 correctness and measured improvement gates. Retain recovery receipts, rollback procedures and owner permission, without performing automatic deployment.
+
 This roadmap tracks candidate optimization families that are worth promoting into the catalog after their source identity, reusable contract, evidence boundary and target-specific validation are written down. A roadmap entry is **not** a verified optimization record and must not be cited as if it were already part of the catalog.
 
 ## Near-term donor mining: VORTEX-N v5.0.0

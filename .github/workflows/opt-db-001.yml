@@ -1,0 +1,62 @@
+name: OPT-DB-001 SQLite observatory conformance
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/inspect_sqlite.py'
+      - 'scripts/create_sqlite_fixture.py'
+      - 'examples/sqlite_workload_v1.json'
+      - 'tests/test_sqlite_observatory.py'
+      - 'optimizations/OPT-DB-001-*.md'
+      - 'sources/SQLITE-QUERY-PLANNING.md'
+      - 'CATALOG.md'
+      - 'README.md'
+      - 'README4AI.md'
+      - 'ROADMAP.md'
+      - '.github/workflows/opt-db-001.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-sqlite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Offline SQLite security and correctness regressions
+        run: python3 -I -B -m unittest discover -s tests -p "test_sqlite_observatory.py" -v
+      - name: Public OPT catalog integrity
+        run: python3 scripts/check_catalog.py
+      - name: Synthetic fixture, explain and bounded benchmark smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          chmod 700 "$scratch"
+          python3 -I -B scripts/create_sqlite_fixture.py --output "$scratch/demo.db"
+          python3 -I -B scripts/inspect_sqlite.py \
+            --db "$scratch/demo.db" \
+            --workload examples/sqlite_workload_v1.json \
+            --output "$scratch/plans.json"
+          python3 -I -B scripts/inspect_sqlite.py \
+            --db "$scratch/demo.db" \
+            --workload examples/sqlite_workload_v1.json \
+            --measure --samples 2 --budget-seconds 15 \
+            --output "$scratch/baseline.json"
+          python3 -I -B - "$scratch" <<'PY'
+          import json, pathlib, sys
+          p = pathlib.Path(sys.argv[1])
+          a = json.loads((p/"plans.json").read_text())
+          b = json.loads((p/"baseline.json").read_text())
+          assert len(a["queries"]) == len(b["queries"]) == 4
+          assert not a["writes_authorized"] and not b["writes_authorized"]
+          assert all(x["execution"] == "not_executed" for x in a["queries"])
+          assert all(len(x["execution"]["samples"]) == 2 for x in b["queries"])
+          assert (p/"plans.json").stat().st_mode & 0o077 == 0
+          PY

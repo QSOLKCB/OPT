@@ -9,7 +9,7 @@
 
 OPT is a contract-driven catalog of reusable optimization patterns, with source provenance, explicit evidence boundaries and executable references. Use it to choose ways to reduce latency, memory, repeated work or CI cost while preserving the correctness contract of your application.
 
-The current release, [**v1.4.0**](https://github.com/QSOLKCB/OPT/releases/tag/v1.4.0), contains **22 optimization records**, exact Python stream references and the preserved Lean model for the five original v1.0.0 records. Its [Zenodo archive and technical report](https://doi.org/10.5281/zenodo.23237223) provide a citable release record.
+The current release, [**v1.4.0**](https://github.com/QSOLKCB/OPT/releases/tag/v1.4.0), contains **22 optimization records**, exact Python stream references and the preserved Lean model for the five original v1.0.0 records. The *unreleased* OPT-DB-001 addition implements a read-only SQLite observatory; its synthetic evidence is not a production database speedup. Its [Zenodo archive and technical report](https://doi.org/10.5281/zenodo.23237223) provide a citable release record.
 
 ## Start here
 
@@ -35,6 +35,22 @@ The v1.4.0 references include:
 Duplicate values retain distinct indices. Modular filtering establishes congruence; it does not establish exact sum equality. A stopped stream prefix does not prove that no later match exists.
 
 The [pair-allocation evidence](examples/evidence/pair-stream-reference.json), [full-join characterization](examples/evidence/pair-join-characterization.md) and [modular-filtering characterization](examples/evidence/modular-pair-stream-characterization.md) document synthetic workloads and their tradeoffs. Lower allocation can come with slower joins; sparse modular workloads can benefit while dense ones do not. These observations do not establish a target-application speedup or a universal default.
+
+## SQLite database observatory (OPT-DB-001 — new, unreleased)
+
+From an owner-reviewed checkout, generate a **synthetic** fixture in a private directory, inspect query plans without executing any SELECT, then explicitly measure a bounded baseline if desired. No Trinite database is modified by these example commands:
+
+```sh
+mkdir -m 700 -p "$HOME/opt-db-lab"
+python3 -I -B scripts/create_sqlite_fixture.py --output "$HOME/opt-db-lab/synthetic.db"
+python3 -I -B scripts/inspect_sqlite.py --db "$HOME/opt-db-lab/synthetic.db" \
+  --workload examples/sqlite_workload_v1.json --output "$HOME/opt-db-lab/plans.json"
+python3 -I -B scripts/inspect_sqlite.py --db "$HOME/opt-db-lab/synthetic.db" \
+  --workload examples/sqlite_workload_v1.json --measure --samples 3 \
+  --output "$HOME/opt-db-lab/baseline.json"
+```
+
+See [OPT-DB-001](optimizations/OPT-DB-001-evidence-gated-sqlite-observatory.md) for strict read-only boundaries, WAL sidecar limitations and how to assess a real SQLite database without revealing private rows.
 
 ## Validate locally
 
@@ -86,6 +102,7 @@ The immutable v1.0.0 release and its five original records are the target of the
 | [OPT-POOL-001](optimizations/OPT-POOL-001-persistent-topology-aware-worker-pools.md) | Persistent topology-aware worker pools | **Implemented external reference** | Reuse workers/buffers across dispatches and choose physical/logical topology explicitly |
 | [OPT-AUTO-001](optimizations/OPT-AUTO-001-calibrated-host-aware-path-promotion.md) | Calibrated host-aware path promotion | **Implemented external reference** | Calibrate equivalent paths on the live host/workload, include lifecycle costs, and promote only with margin + oracle parity |
 | [OPT-CACHE-001](optimizations/OPT-CACHE-001-working-set-aware-cache-capacity.md) | Working-set-aware cache capacity | **Proposed / OPT synthesis** | Size/manage reuse caches against measured working-set cardinality and resource budget to avoid eviction/reconstruction thrash |
+| [OPT-DB-001](optimizations/OPT-DB-001-evidence-gated-sqlite-observatory.md) | Evidence-gated SQLite observatory | **Implemented reference; no target speedup established** | Inspect parameterized query plans and indexes without database DDL; optionally measure bounded SELECT baselines, retain private reports and reject unsafe SQL |
 | [OPT-STREAM-001](optimizations/OPT-STREAM-001-bounded-replayable-pair-streams.md) | Bounded replayable pair streams | **Implemented reference** | Enumerate exact combinations from compact inputs; buffer and replay large ties instead of materializing every result |
 
 See [CATALOG.md](CATALOG.md) for the decision map and [README4AI.md](README4AI.md) for machine-oriented usage.
