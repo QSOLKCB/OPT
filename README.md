@@ -36,7 +36,7 @@ Duplicate values retain distinct indices. Modular filtering establishes congruen
 
 The [pair-allocation evidence](examples/evidence/pair-stream-reference.json), [full-join characterization](examples/evidence/pair-join-characterization.md) and [modular-filtering characterization](examples/evidence/modular-pair-stream-characterization.md) document synthetic workloads and their tradeoffs. Lower allocation can come with slower joins; sparse modular workloads can benefit while dense ones do not. These observations do not establish a target-application speedup or a universal default.
 
-## SQLite database observatory (OPT-DB-001 — new, unreleased)
+## Multiobjective Pareto selection (OPT-PARETO-001 — unreleased)\n\nThe new [finite-ledger Pareto reference](examples/pareto_frontier.py) selects every nondominated, **feasible observed** design while retaining ties, mixed objective directions and original ledger order. It does **not** optimize frame rates or prove a global frontier. [OPT-PARETO-001](optimizations/OPT-PARETO-001-bounded-pareto-frontier.md) documents bounds and independent-oracle tests; the [source note](sources/ALGORITHMS-FOR-OPTIMIZATION-2026.md) acknowledges Kochenderfer and Wheeler's 2026 *Algorithms for Optimization*, chapter 15, and its licence boundary.\n\nExample: `python3 examples/pareto_frontier.py` (synthetic values; not VANILLAJS evidence).\n\n## SQLite database observatory (OPT-DB-001 — new, unreleased)
 
 From an owner-reviewed checkout, generate a **synthetic** fixture in a private directory, inspect query plans without executing any SELECT, then explicitly measure a bounded baseline if desired. No Trinite database is modified by these example commands:
 
