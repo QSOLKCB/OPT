@@ -49,7 +49,7 @@ Before choosing an optimizer, classify:
 - several exact execution paths trade places across hosts/workloads → `OPT-AUTO-001`
 - reuse cache repeatedly evicts expensive states before reuse → `OPT-CACHE-001`
 - materialized pair products or equal-key groups exceed working memory → `OPT-STREAM-001`
-- SQLite query plans/index usage need safe baseline evidence before any tuning → `OPT-DB-001`
+- SQLite query plans/index usage need safe baseline evidence before any tuning → `OPT-DB-001`\n- multiple observed feasible configurations have conflicting metrics → `OPT-PARETO-001`
 
 ## Important distinctions
 
@@ -64,7 +64,7 @@ Before choosing an optimizer, classify:
 - **cache capacity**: controls how much correct reusable state survives until reuse; a larger cache is not automatically better and a fixed cap is not portable across working sets;
 - **approximation**: a contract choice, never a hidden optimization.
 - **database observability**: separate read-only plan inspection from bounded SELECT measurements; neither authorizes live schema changes or proves speedup;
-- **streaming/replay**: retains less intermediate state while regenerating exact occurrences; it does not reduce required output count or authorize pruning.
+- **Pareto selection**: an observed nondominated frontier of measured feasible designs is not a global search result or a renderer speedup. Preserve ties and feasibility provenance.\n- **streaming/replay**: retains less intermediate state while regenerating exact occurrences; it does not reduce required output count or authorize pruning.
 
 ## Status vocabulary
 
