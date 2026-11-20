@@ -27,6 +27,7 @@
 | Reuse cache repeatedly evicts expensive states before their next reuse | [OPT-CACHE-001](optimizations/OPT-CACHE-001-working-set-aware-cache-capacity.md) | Size/manage retention against the measured reuse working set and resource budget |
 | Materialized combinations or equal-key joins exceed working memory | [OPT-STREAM-001](optimizations/OPT-STREAM-001-bounded-replayable-pair-streams.md) | Heap-stream indexed occurrences and replay oversized ties through a bounded buffer |
 | SQLite queries need index/plan evidence before safe tuning | [OPT-DB-001](optimizations/OPT-DB-001-evidence-gated-sqlite-observatory.md) | Inspect schema/plans read-only; optionally measure bounded SELECT baselines without authorizing DDL |
+| Competing feasible designs trade frame time, memory and quality with no agreed scalar weights | [OPT-PARETO-001](optimizations/OPT-PARETO-001-bounded-pareto-frontier.md) | Select exactly the nondominated designs from a bounded measured ledger, retaining all ties |
 
 Before selecting a record, define the target problem using [`OPTIMIZATION-PROBLEM.md`](OPTIMIZATION-PROBLEM.md).
 
@@ -121,6 +122,10 @@ An exact integer reference enumerates pair products and full equal-sum Cartesian
 ### OPT-DB-001 — Evidence-gated SQLite observatory
 
 A first-party Python standard-library inspector inventories SQLite schema/indexes, uses deny-by-default query admission and EXPLAIN QUERY PLAN for up to 16 parameterized SELECTs, and optionally hashes complete bounded result streams with retained latency samples. It creates owner-private 0600 report files and refuses production DDL, schema tuning, output truncation and unsafe SQL. The default is **explain-only**, and even measured results are *baseline evidence*, not demonstrated index optimization. The companion synthetic fixture and offline tests require no real database content. A read-only live WAL connection can create coordination sidecars; use immutable mode only for a genuinely frozen standalone snapshot.
+
+### OPT-PARETO-001 — Bounded deterministic Pareto-frontier selection
+
+A Python standard-library reference computes strict Pareto nondominance over a finite, prevalidated ledger (2–8 objectives; up to 4096 candidates). Mixed minimize/maximize metrics, ties, infeasible records, exact integer comparison and source ordering are explicit. This is an **observed frontier**, not an optimizer, globally complete proof, or measured speedup. See [MIT Press source note](sources/ALGORITHMS-FOR-OPTIMIZATION-2026.md).
 
 ## Mathematical evidence
 
