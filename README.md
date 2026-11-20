@@ -36,7 +36,13 @@ Duplicate values retain distinct indices. Modular filtering establishes congruen
 
 The [pair-allocation evidence](examples/evidence/pair-stream-reference.json), [full-join characterization](examples/evidence/pair-join-characterization.md) and [modular-filtering characterization](examples/evidence/modular-pair-stream-characterization.md) document synthetic workloads and their tradeoffs. Lower allocation can come with slower joins; sparse modular workloads can benefit while dense ones do not. These observations do not establish a target-application speedup or a universal default.
 
-## Multiobjective Pareto selection (OPT-PARETO-001 — unreleased)\n\nThe new [finite-ledger Pareto reference](examples/pareto_frontier.py) selects every nondominated, **feasible observed** design while retaining ties, mixed objective directions and original ledger order. It does **not** optimize frame rates or prove a global frontier. [OPT-PARETO-001](optimizations/OPT-PARETO-001-bounded-pareto-frontier.md) documents bounds and independent-oracle tests; the [source note](sources/ALGORITHMS-FOR-OPTIMIZATION-2026.md) acknowledges Kochenderfer and Wheeler's 2026 *Algorithms for Optimization*, chapter 15, and its licence boundary.\n\nExample: `python3 examples/pareto_frontier.py` (synthetic values; not VANILLAJS evidence).\n\n## SQLite database observatory (OPT-DB-001 — new, unreleased)
+## Multiobjective Pareto selection (OPT-PARETO-001 — unreleased)
+
+The new [finite-ledger Pareto reference](examples/pareto_frontier.py) selects every nondominated, **feasible observed** design while retaining ties, mixed objective directions and original ledger order. It does **not** optimize frame rates or prove a global frontier. [OPT-PARETO-001](optimizations/OPT-PARETO-001-bounded-pareto-frontier.md) documents bounds and independent-oracle tests; the [source note](sources/ALGORITHMS-FOR-OPTIMIZATION-2026.md) acknowledges Kochenderfer and Wheeler's 2026 *Algorithms for Optimization*, chapter 15, and its licence boundary.
+
+Example: `python3 examples/pareto_frontier.py` (synthetic values; not VANILLAJS evidence).
+
+## SQLite database observatory (OPT-DB-001 — new, unreleased)
 
 From an owner-reviewed checkout, generate a **synthetic** fixture in a private directory, inspect query plans without executing any SELECT, then explicitly measure a bounded baseline if desired. No Trinite database is modified by these example commands:
 
@@ -103,6 +109,7 @@ The immutable v1.0.0 release and its five original records are the target of the
 | [OPT-AUTO-001](optimizations/OPT-AUTO-001-calibrated-host-aware-path-promotion.md) | Calibrated host-aware path promotion | **Implemented external reference** | Calibrate equivalent paths on the live host/workload, include lifecycle costs, and promote only with margin + oracle parity |
 | [OPT-CACHE-001](optimizations/OPT-CACHE-001-working-set-aware-cache-capacity.md) | Working-set-aware cache capacity | **Proposed / OPT synthesis** | Size/manage reuse caches against measured working-set cardinality and resource budget to avoid eviction/reconstruction thrash |
 | [OPT-DB-001](optimizations/OPT-DB-001-evidence-gated-sqlite-observatory.md) | Evidence-gated SQLite observatory | **Implemented reference; no target speedup established** | Inspect parameterized query plans and indexes without database DDL; optionally measure bounded SELECT baselines, retain private reports and reject unsafe SQL |
+| [OPT-PARETO-001](optimizations/OPT-PARETO-001-bounded-pareto-frontier.md) | Bounded deterministic Pareto-frontier selection | **Implemented reference; finite-ledger correctness only** | Identify all nondominated feasible observed configurations, retaining exact metric ties, mixed directions and ledger order; no global or speedup claim |
 | [OPT-STREAM-001](optimizations/OPT-STREAM-001-bounded-replayable-pair-streams.md) | Bounded replayable pair streams | **Implemented reference** | Enumerate exact combinations from compact inputs; buffer and replay large ties instead of materializing every result |
 
 See [CATALOG.md](CATALOG.md) for the decision map and [README4AI.md](README4AI.md) for machine-oriented usage.
