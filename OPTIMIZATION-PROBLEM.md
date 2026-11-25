@@ -68,6 +68,7 @@ Use the problem classification to select a mechanism:
 - expensive black-box continuous or mixed tuning → `OPT-SEARCH-001`;
 - discrete search with provable optimistic bounds → `OPT-PRUNE-001`;
 - independent work that can run concurrently → `OPT-PAR-001`;
+- setup-sensitive or mixed-granularity execution selection → `OPT-HYBRID-001` (serial is a first-class candidate; compare full paid lifecycles);
 - repeated equivalent work → `OPT-INV-001`;
 - simultaneous identical in-flight work → `OPT-COAL-001`;
 - approximation explicitly permitted → `OPT-APPROX-001`.

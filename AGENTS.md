@@ -31,3 +31,5 @@ Machine-facing rules for agents using this repository.
 27. For mathematical/formal donors, read `EVIDENCE-SCOPE.md`; distinguish integrity checks, numerical replay, manuscript arguments, selected theorem coverage and target performance. Published replay instructions are not evidence of an executed replay.
 28. For streamed products and joins, preserve indexed multiplicity, exact ordering and complete tie enumeration; account for replay/snapshot work and consumer output storage. A stopped prefix is incomplete, not a negative decision.
 29. Keep external Lean replay separate from the pinned v1 model unless a separately reviewed integration satisfies its toolchain, dependency and axiom gates. Challenge placeholders are not solution proofs.
+
+30. For OPT-HYBRID-001, remove preparation only under preserved semantics; use serial as a first-class candidate. Bind full effective source/workload/runtime/host and strategy to a coherent immutable generation, charge all paid lifecycle terms symmetrically, retain unsuccessful timings, and never silently fallback after a correctness failure. Synthetic benchmarks do not promote blocked donors or create theorem coverage.

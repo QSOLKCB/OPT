@@ -102,3 +102,4 @@ Immediately reject the selected path on full-work oracle mismatch and discard al
 ## Composition notes
 
 This record selects among mechanisms such as `OPT-SOA-001`, `OPT-POOL-001`, `OPT-SIMD-001` and canonical paths after those mechanisms have their own correctness gates. It complements `OPT-BUDGET-001`: regression budgets can detect when a formerly promoted path stops meeting its measured advantage.
+For mixed-granularity serial/parallel/hybrid execution, see [OPT-HYBRID-001](OPT-HYBRID-001-evidence-gated-hybrid-execution.md). It specializes this contract; it does not relax the symmetric paid invocation boundary, independent full-work verification or fail-closed commitment rule.

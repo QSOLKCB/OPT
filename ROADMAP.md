@@ -1,5 +1,9 @@
 # OPT Roadmap
 
+## New implementation — OPT-HYBRID-001 evidence-gated hybrid execution
+
+**Implemented reference for review, not a release or production speedup:** [OPT-HYBRID-001](optimizations/OPT-HYBRID-001-evidence-gated-hybrid-execution.md) integrates a bounded exact DAG executor, immutable evidence ledger, full-work oracle and finite Pareto selection. Optional synthetic characterization evaluates serial, parallel and explicit hybrid partitions; no timing threshold is mandatory. Production adapters, authenticated immutable input capture, hard aggregate memory control, representative target calibration and independent acceptance remain future work. Do not transfer the blocked donor implementation.
+
 ## New implementation — OPT-DB-001 SQLite query/index observatory (9 November 2026)
 
 **Implemented for review, not a released speedup:** [OPT-DB-001](optimizations/OPT-DB-001-evidence-gated-sqlite-observatory.md) adds a Python-stdlib, read-only SQLite observatory: bounded JSON workloads, schema/index inventory, EXPLAIN QUERY PLAN, optional explicitly requested full-result-bounded latency sampling, typed result digests and private no-clobber reports. A deterministic synthetic generator and offline adverse-case tests preserve source rows. A normal SQLite `mode=ro` reader may create WAL coordination files; genuine immutable mode is restricted to standalone DELETE snapshots. No live DDL, PRAGMA optimize, VACUUM, schema migration, training or production Trinite runtime change is authorized.

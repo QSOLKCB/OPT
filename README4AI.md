@@ -47,6 +47,7 @@ Before choosing an optimizer, classify:
 - large AoS traversal needs cache-local bounded hot-field chunks → `OPT-SOA-001`
 - repeated parallel runs pay thread/buffer startup or need explicit physical/logical worker policy → `OPT-POOL-001`
 - several exact execution paths trade places across hosts/workloads → `OPT-AUTO-001`
+- mixed-granularity/dependency workloads or setup-dominated parallelism → `OPT-HYBRID-001`
 - reuse cache repeatedly evicts expensive states before reuse → `OPT-CACHE-001`
 - materialized pair products or equal-key groups exceed working memory → `OPT-STREAM-001`
 - SQLite query plans/index usage need safe baseline evidence before any tuning → `OPT-DB-001`
@@ -61,6 +62,7 @@ Before choosing an optimizer, classify:
 - **SIMD/autovectorization**: changes instruction-level execution of equivalent batch work; code-generation evidence is not itself an end-to-end speedup;
 - **SoA tiling**: changes temporary data layout/working-set shape while preserving the logical source/output contract;
 - **persistent pools**: change worker lifetime and lifecycle amortization, not the kernel's semantics;
+- **hybrid execution**: serial, parallel and explicit partitions are competing candidates; first remove provably redundant preparation, bind complete immutable input identity and compare full paid lifecycles; never promote a blocked donor or infer a universal crossover.
 - **host-auto promotion**: selects among already-correct paths using live calibration and a fail-closed oracle; it does not make one path universally best;
 - **cache capacity**: controls how much correct reusable state survives until reuse; a larger cache is not automatically better and a fixed cap is not portable across working sets;
 - **approximation**: a contract choice, never a hidden optimization.
@@ -88,6 +90,7 @@ The frozen v1 records retain their historical release wording and are exempt fro
 - Never weaken an assertion, tolerance, theorem target, receipt, trust boundary or validation rule without an explicit contract change.
 - Never treat a cache hit as proof of a cold rebuild.
 - Never equate requested workers with observed effective execution.
+- Never treat a Git SHA alone as execution provenance, or kernel-only timings as complete paid execution. A stale ledger cannot authorize parallel/hybrid promotion; current correctness failure requires fail-closed behavior.
 - Never copy historical worker counts, thresholds, search budgets, bit partitions, cache sizes, tile sizes, calibration repeats, promotion margins or approximation limits without target measurement.
 - Never prune a search region unless the bound used for pruning is sound for the declared problem.
 - Never call an approximate result exact.
