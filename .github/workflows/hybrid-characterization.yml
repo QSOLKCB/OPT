@@ -1,0 +1,28 @@
+name: OPT-HYBRID-001 characterization
+
+# A diagnostic research workflow, not a performance-threshold gate.
+on:
+  pull_request:
+    paths:
+      - 'examples/hybrid_execution.py'
+      - 'examples/pareto_frontier.py'
+      - 'scripts/benchmark_hybrid_execution.py'
+      - '.github/workflows/hybrid-characterization.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  characterize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Run optional synthetic characterization (no timing threshold)
+        run: |
+          python3 -I scripts/benchmark_hybrid_execution.py --workers 7 --repetitions 2 > "$RUNNER_TEMP/hybrid-report.json"
+          cat "$RUNNER_TEMP/hybrid-report.json"

@@ -24,6 +24,7 @@
 | Large AoS traversal wastes cache/memory and only a bounded hot subset is needed at once | [OPT-SOA-001](optimizations/OPT-SOA-001-worker-local-soa-tiling.md) | Transform bounded per-worker tiles into SoA and reuse cache-local scratch |
 | Repeated parallel runs keep paying thread/buffer startup or misuse SMT topology | [OPT-POOL-001](optimizations/OPT-POOL-001-persistent-topology-aware-worker-pools.md) | Persist workers/buffers and choose physical/logical worker policy explicitly |
 | Several exact execution paths trade places across hosts or workload shapes | [OPT-AUTO-001](optimizations/OPT-AUTO-001-calibrated-host-aware-path-promotion.md) | Calibrate bounded candidates, include lifecycle cost, require margin and fail-closed oracle parity |
+| Setup costs or mixed dependency/granularity change the serial/parallel crossover | [OPT-HYBRID-001](optimizations/OPT-HYBRID-001-evidence-gated-hybrid-execution.md) | Eliminate equivalent redundant preparation, compare verified complete lifecycles, retain serial near ties |
 | Reuse cache repeatedly evicts expensive states before their next reuse | [OPT-CACHE-001](optimizations/OPT-CACHE-001-working-set-aware-cache-capacity.md) | Size/manage retention against the measured reuse working set and resource budget |
 | Materialized combinations or equal-key joins exceed working memory | [OPT-STREAM-001](optimizations/OPT-STREAM-001-bounded-replayable-pair-streams.md) | Heap-stream indexed occurrences and replay oversized ties through a bounded buffer |
 | SQLite queries need index/plan evidence before safe tuning | [OPT-DB-001](optimizations/OPT-DB-001-evidence-gated-sqlite-observatory.md) | Inspect schema/plans read-only; optionally measure bounded SELECT baselines without authorizing DDL |
@@ -127,6 +128,10 @@ A first-party Python standard-library inspector inventories SQLite schema/indexe
 
 A Python standard-library reference computes strict Pareto nondominance over a finite, prevalidated ledger (2–8 objectives; up to 4096 candidates). Mixed minimize/maximize metrics, ties, infeasible records, exact integer comparison and source ordering are explicit. This is an **observed frontier**, not an optimizer, globally complete proof, or measured speedup. See [MIT Press source note](sources/ALGORITHMS-FOR-OPTIMIZATION-2026.md).
 
+### OPT-HYBRID-001 — Evidence-gated hybrid execution
+
+A first-party bounded synthetic executor and deterministic evidence selector preserve canonical order, dependencies and independent full-work correctness across serial, process-parallel and hybrid plans. Current source/workload/runtime identity, budgets, complete lifecycle accounting and a material margin precede promotion. The optional benchmark retains losing samples; [YTDLP-AUDIT-001](sources/YTDLP-AUDIT-001.md) is historical motivation, not a verified production donor. See [OPT-HYBRID-001](optimizations/OPT-HYBRID-001-evidence-gated-hybrid-execution.md).
+
 ## Mathematical evidence
 
 Use [EVIDENCE-SCOPE.md](EVIDENCE-SCOPE.md) to state the computational model, hypotheses, guarantee, formal coverage, permitted axioms and independent replay status. The [OpenAI donor assessment](sources/OPENAI-MATH.md) adopts a narrow streaming mechanism and evidence practices while keeping the headline algorithm claims outside OPT's target performance guarantees.
@@ -148,5 +153,7 @@ Optimizations compose only when their semantic and resource models compose.
 - host-auto selection must calibrate only candidates that already satisfy their own correctness contracts and must not convert a selector heuristic into a universal hardware ranking;
 - cache-capacity tuning must measure the active reuse working set and total reconstruction cost while enforcing memory/resource limits; fixing thrash by making a cache effectively unbounded merely moves the failure boundary.
 - streamed enumeration reduces retained intermediates but still pays for every required output; replay may dominate at small buffer sizes, and consumers or parallel workers can restore the memory bottleneck.
+
+- hybrid scheduling composes with host-auto and Pareto selection only when all candidates share a full paid lifecycle and exact oracle; eliminate redundant preparation before parallelism.
 
 Prefer one measured bottleneck removal at a time, then re-profile and reconsider the problem contract.

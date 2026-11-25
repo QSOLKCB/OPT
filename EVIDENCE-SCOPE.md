@@ -43,3 +43,7 @@ The donor uses Lean 4.34.1 and a substantial dependency graph. OPT's pinned v1 m
 - A copied input manifest passes an integrity check only; execute the numerical replay separately before recording that calculation as checked.
 
 See [the pinned donor assessment](sources/OPENAI-MATH.md) and [the record template](templates/OPTIMIZATION-RECORD.md). These examples guide evidence claims; they are not independent performance optimizations.
+
+## Execution evidence and lifecycle scope
+
+For [OPT-HYBRID-001](optimizations/OPT-HYBRID-001-evidence-gated-hybrid-execution.md), distinguish historical audit-reported measurements, synthetic selection fixtures, executed reference benchmarks and production workload validation. A Git commit, clean working tree, test count or worker count alone cannot establish execution identity or equivalent outcomes. Bind materialized effective source, selected units, dependencies/plugins, runtime, configuration, host limits and strategy to an immutable input generation. Charge preparation, tuning, verification, staging and cleanup under the same paid boundary for every candidate. Wall time is critical-path elapsed time, not the sum of overlapping phase intervals; CPU and runner consumption are separate. Unknown aggregate peak memory is not zero or the maximum of individual process RSS. A blocked donor or successful synthetic benchmark cannot establish production eligibility. No new formal coverage follows.

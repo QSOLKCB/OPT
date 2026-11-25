@@ -90,3 +90,5 @@ Disable/revert this selector for a target if oracle parity, input bounds, tie or
 ## Composition notes
 
 `OPT-SEARCH-001` may supply bounded trial observations and `OPT-BUDGET-001` may govern evidence collection. `OPT-PRUNE-001` is **scalar-only** and cannot be applied to discard Pareto candidates without a separately sound vector-bound proof. `OPT-APPROX-001` may admit approximate metrics only if a new explicit uncertainty/error contract is separately validated. Never insert this O(n²) selector inside VANILLAJS's 60 Hz hot loop.
+
+[OPT-HYBRID-001](OPT-HYBRID-001-evidence-gated-hybrid-execution.md) composes this selector with external identity, exactness and resource qualification. Its promotion margin and canonical fallback are policy outside Pareto dominance; retaining a nondominated configuration does not itself authorize execution.
