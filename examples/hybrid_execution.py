@@ -125,11 +125,15 @@ class Policy:
     max_wall_ns: int | None = None
     max_cpu_ns: int | None = None
     max_memory_bytes: int | None = None
-    # Common invocation costs not present in individual samples (e.g.
-    # calibration, identity capture, selection). Zero only for declared
-    # out-of-band calibration or if already charged in each sample.
+    # Projected live selection overhead, absent from run_verified samples.
+    # Actual elapsed selection is already inside execute_selected's timer.
     common_wall_ns: int = 0
     common_cpu_ns: int = 0
+    # Paid costs outside that timer AND absent from the calibration samples
+    # (e.g. pre-incurred capture/calibration). Never include live selection.
+    # Zero for out-of-band research or costs already inside the interval.
+    external_wall_ns: int = 0
+    external_cpu_ns: int = 0
 
 
 def levels(workload):
@@ -220,7 +224,8 @@ def _policy(policy):
     integer(policy.max_trials, 1, MAX_TRIALS)
     integer(policy.min_repetitions, 1, 16)
     integer(policy.margin_bps, 0, 9999)
-    for n in (policy.common_wall_ns, policy.common_cpu_ns):
+    for n in (policy.common_wall_ns, policy.common_cpu_ns,
+              policy.external_wall_ns, policy.external_cpu_ns):
         integer(n)
     for n in (policy.max_wall_ns, policy.max_cpu_ns, policy.max_memory_bytes):
         if n is not None:
@@ -278,9 +283,11 @@ def select(workload, context, ledger, policy=Policy(), *, override=None):
         elif len(item.samples) < policy.min_repetitions:
             reason = "insufficient repetitions"
         else:
-            wall = max(s.wall_ns for s in item.samples) + policy.common_wall_ns
-            best = min(s.wall_ns for s in item.samples) + policy.common_wall_ns
-            cpu = (max(s.cpu_ns for s in item.samples) + policy.common_cpu_ns
+            common_wall = policy.common_wall_ns + policy.external_wall_ns
+            common_cpu = policy.common_cpu_ns + policy.external_cpu_ns
+            wall = max(s.wall_ns for s in item.samples) + common_wall
+            best = min(s.wall_ns for s in item.samples) + common_wall
+            cpu = (max(s.cpu_ns for s in item.samples) + common_cpu
                    if all(s.cpu_ns is not None for s in item.samples) else None)
             memory = (max(s.peak_memory_bytes for s in item.samples)
                       if all(s.peak_memory_bytes is not None for s in item.samples) else None)
@@ -457,10 +464,17 @@ def execute_selected(workload, context, ledger, policy=Policy(), *, override=Non
     if run["identity"] != receipt["selected_identity"]:
         raise CorrectnessError("execution identity mismatch")
     cpu_end = _cpu_ns()
-    wall = monotonic_ns() - start + policy.common_wall_ns
-    cpu = None if cpu_end is None else max(0, cpu_end-cpu_start) + policy.common_cpu_ns
+    measured_wall = monotonic_ns() - start
+    measured_cpu = (None if cpu_start is None or cpu_end is None
+                    else max(0, cpu_end-cpu_start))
+    wall = measured_wall + policy.external_wall_ns
+    cpu = None if measured_cpu is None else measured_cpu + policy.external_cpu_ns
     if ((policy.max_wall_ns is not None and wall > policy.max_wall_ns) or
             (policy.max_cpu_ns is not None and (cpu is None or cpu > policy.max_cpu_ns))):
         raise BudgetError("actual invocation exceeded measured budget; output discarded")
     return result, receipt, {"run": run, "sample": asdict(sample),
+                             "measured_wall_ns": measured_wall,
+                             "measured_cpu_ns": measured_cpu,
+                             "external_wall_ns": policy.external_wall_ns,
+                             "external_cpu_ns": policy.external_cpu_ns,
                              "paid_wall_ns": wall, "paid_cpu_ns": cpu}

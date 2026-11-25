@@ -173,6 +173,51 @@ class HybridTests(unittest.TestCase):
             with self.assertRaises(h.CorrectnessError):
                 h.run_verified(self.w,self.ctx,h.SERIAL)
 
+    def test_live_selection_overhead_is_not_charged_twice(self):
+        serial = self.evidence(h.SERIAL, 60, cpu=60)
+        policy = replace(self.policy, common_wall_ns=20, common_cpu_ns=20,
+                         max_wall_ns=90, max_cpu_ns=90)
+        plan, receipt = self.choose(serial, policy=policy)
+        self.assertEqual(plan, h.SERIAL)
+        self.assertEqual(receipt["candidates"][0]["worst_wall_ns"], 80)
+        self.assertEqual(receipt["candidates"][0]["worst_cpu_ns"], 80)
+        run = {"identity": h.identity(self.w,self.ctx,h.SERIAL), "verified": True}
+        with patch.object(h,"monotonic_ns",side_effect=[0,80]), \
+             patch.object(h,"_cpu_ns",side_effect=[0,80]), \
+             patch.object(h,"run_verified",return_value=(self.expected,h.Sample(60,60),run)):
+            result, _, executed = h.execute_selected(self.w,self.ctx,(serial,),policy)
+        self.assertEqual(result,self.expected)
+        self.assertEqual(executed["paid_wall_ns"],80)
+        self.assertEqual(executed["paid_cpu_ns"],80)
+        self.assertEqual(executed["measured_wall_ns"],80)
+
+    def test_external_costs_are_charged_once_and_budget_uses_actual(self):
+        serial = self.evidence(h.SERIAL,60,cpu=60)
+        policy = replace(self.policy, common_wall_ns=20,common_cpu_ns=20,
+                         external_wall_ns=10,external_cpu_ns=5,
+                         max_wall_ns=90,max_cpu_ns=85)
+        _, receipt = self.choose(serial,policy=policy)
+        self.assertEqual(receipt["candidates"][0]["worst_wall_ns"],90)
+        self.assertEqual(receipt["candidates"][0]["worst_cpu_ns"],85)
+        run = {"identity": h.identity(self.w,self.ctx,h.SERIAL),"verified":True}
+        with patch.object(h,"monotonic_ns",side_effect=[0,80]), \
+             patch.object(h,"_cpu_ns",side_effect=[0,80]), \
+             patch.object(h,"run_verified",return_value=(self.expected,h.Sample(60,60),run)):
+            _, _, executed = h.execute_selected(self.w,self.ctx,(serial,),policy)
+        self.assertEqual(executed["paid_wall_ns"],90)
+        self.assertEqual(executed["paid_cpu_ns"],85)
+        self.assertEqual(executed["external_wall_ns"],10)
+        self.assertEqual(executed["external_cpu_ns"],5)
+        for elapsed,cpu in ((81,80),(80,81)):
+            with self.subTest(elapsed=elapsed,cpu=cpu), \
+                 patch.object(h,"monotonic_ns",side_effect=[0,elapsed]), \
+                 patch.object(h,"_cpu_ns",side_effect=[0,cpu]), \
+                 patch.object(h,"run_verified",return_value=(self.expected,h.Sample(60,60),run)), \
+                 self.assertRaises(h.BudgetError):
+                h.execute_selected(self.w,self.ctx,(serial,),policy)
+        with self.assertRaises(ValueError):
+            self.choose(serial,policy=replace(policy,external_wall_ns=-1))
+
     def test_actual_invocation_receipt(self):
         result,selection,execution = h.execute_selected(self.w,self.ctx,())
         self.assertEqual(result,self.expected)

@@ -7,6 +7,8 @@ on:
       - 'examples/hybrid_execution.py'
       - 'examples/pareto_frontier.py'
       - 'scripts/benchmark_hybrid_execution.py'
+      - 'tests/test_hybrid_execution.py'
+      - 'tests/test_hybrid_characterization.py'
       - '.github/workflows/hybrid-characterization.yml'
   workflow_dispatch:
 
@@ -22,7 +24,11 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Run focused hybrid regressions
+        run: python3 -I -m unittest discover -s tests -p 'test_hybrid*.py' -v
       - name: Run optional synthetic characterization (no timing threshold)
         run: |
-          python3 -I scripts/benchmark_hybrid_execution.py --workers 7 --repetitions 2 > "$RUNNER_TEMP/hybrid-report.json"
+          status=0
+          python3 -I scripts/benchmark_hybrid_execution.py --workers 7 --repetitions 2 > "$RUNNER_TEMP/hybrid-report.json" || status=$?
           cat "$RUNNER_TEMP/hybrid-report.json"
+          exit "$status"
